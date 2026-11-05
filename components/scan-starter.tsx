@@ -68,9 +68,10 @@ export function ScanStarter() {
             <button
               type="submit"
               disabled={busy || !root.trim()}
-              className="rounded-lg bg-teal-700 px-5 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-stone-300"
+              className="aqua aqua-teal px-7 py-2 text-sm"
             >
-              {busy ? "開始中…" : "棚卸しを開始"}
+              {/* Aqua 風のカプセル形ジェルボタン（globals.css の .aqua） */}
+              <span>{busy ? "開始中…" : "棚卸しを開始"}</span>
             </button>
           </div>
         </label>

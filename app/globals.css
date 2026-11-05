@@ -17,3 +17,168 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+
+/*
+ * macOS Aqua 風のジェルボタン。
+ * 縦グラデーション + 上半分の光沢（::before）+ 下側の照り返し + ドロップシャドウ。
+ * 色は --aqua-hue 系の変数で切り替える。中身は <span> で包み、光沢より前面に出す。
+ */
+@layer components {
+  .aqua {
+    --aqua-top: #6ee7b7;
+    --aqua-mid: #10b981;
+    --aqua-bottom: #047857;
+    --aqua-border: #065f46;
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid var(--aqua-border);
+    border-radius: 9999px;
+    color: #fff;
+    font-weight: 600;
+    text-shadow: 0 -1px 0 rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.25);
+    background: linear-gradient(
+      to bottom,
+      var(--aqua-top) 0%,
+      var(--aqua-mid) 50%,
+      var(--aqua-bottom) 51%,
+      var(--aqua-mid) 100%
+    );
+    box-shadow:
+      inset 0 -3px 6px rgb(255 255 255 / 0.35),
+      inset 0 1px 0 rgb(255 255 255 / 0.5),
+      0 2px 4px rgb(0 0 0 / 0.25),
+      0 1px 1px rgb(0 0 0 / 0.15);
+    transition: filter 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+  }
+  /* 上半分の光沢 */
+  .aqua::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    left: 10%;
+    right: 10%;
+    top: 1px;
+    height: 48%;
+    border-radius: 9999px;
+    background: linear-gradient(to bottom, rgb(255 255 255 / 0.75), rgb(255 255 255 / 0.08));
+    pointer-events: none;
+  }
+  .aqua > span {
+    position: relative;
+  }
+  .aqua:hover:not(:disabled) {
+    filter: brightness(1.07) saturate(1.05);
+  }
+  .aqua:active:not(:disabled) {
+    filter: brightness(0.92);
+    transform: translateY(1px);
+    box-shadow:
+      inset 0 2px 4px rgb(0 0 0 / 0.3),
+      inset 0 -2px 4px rgb(255 255 255 / 0.25),
+      0 1px 1px rgb(0 0 0 / 0.2);
+  }
+  .aqua:focus-visible {
+    outline: 3px solid rgb(59 130 246 / 0.55);
+    outline-offset: 2px;
+  }
+  .aqua:disabled {
+    --aqua-top: #f5f5f4;
+    --aqua-mid: #d6d3d1;
+    --aqua-bottom: #a8a29e;
+    --aqua-border: #a8a29e;
+    color: #f5f5f4;
+    cursor: not-allowed;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
+  }
+
+  /*
+   * Aqua 風プログレスバー。
+   * 溝（.aqua-progress）はくぼみ、バー（.aqua-progress-bar）はジェルの質感 + 流れる斜め縞。
+   */
+  .aqua-progress {
+    position: relative;
+    height: 14px;
+    overflow: hidden;
+    border-radius: 9999px;
+    border: 1px solid #c7c4c0;
+    background: linear-gradient(to bottom, #e7e5e4 0%, #f5f5f4 55%, #fafaf9 100%);
+    box-shadow:
+      inset 0 2px 3px rgb(0 0 0 / 0.18),
+      inset 0 -1px 0 rgb(255 255 255 / 0.8);
+  }
+  .aqua-progress-bar {
+    --aqua-top: #86efac;
+    --aqua-mid: #16a34a;
+    --aqua-bottom: #15803d;
+    --aqua-border: #166534;
+    position: relative;
+    height: 100%;
+    border-radius: 9999px;
+    box-shadow:
+      inset 0 0 0 1px var(--aqua-border),
+      inset 0 -2px 3px rgb(255 255 255 / 0.35);
+    background:
+      /* 流れる斜め縞 */
+      repeating-linear-gradient(
+        -45deg,
+        rgb(255 255 255 / 0.18) 0 8px,
+        transparent 8px 16px
+      ),
+      linear-gradient(
+        to bottom,
+        var(--aqua-top) 0%,
+        var(--aqua-mid) 50%,
+        var(--aqua-bottom) 51%,
+        var(--aqua-mid) 100%
+      );
+    background-size: 22.6px 100%, 100% 100%;
+    animation: aqua-stripes 1s linear infinite;
+    transition: width 400ms ease;
+  }
+  /* 上半分の光沢 */
+  .aqua-progress-bar::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    top: 1px;
+    height: 45%;
+    border-radius: 9999px;
+    background: linear-gradient(to bottom, rgb(255 255 255 / 0.8), rgb(255 255 255 / 0.1));
+    pointer-events: none;
+  }
+  .aqua-progress-bar.aqua-teal {
+    --aqua-top: #7fd8cf;
+    --aqua-mid: #0f766e;
+    --aqua-bottom: #115e59;
+    --aqua-border: #134e4a;
+  }
+  @keyframes aqua-stripes {
+    from {
+      background-position: 0 0, 0 0;
+    }
+    to {
+      background-position: 22.6px 0, 0 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .aqua-progress-bar {
+      animation: none;
+    }
+  }
+
+  /* 色のバリエーション */
+  .aqua-green {
+    --aqua-top: #86efac;
+    --aqua-mid: #16a34a;
+    --aqua-bottom: #15803d;
+    --aqua-border: #166534;
+  }
+  .aqua-teal {
+    --aqua-top: #7fd8cf;
+    --aqua-mid: #0f766e;
+    --aqua-bottom: #115e59;
+    --aqua-border: #134e4a;
+  }
+}

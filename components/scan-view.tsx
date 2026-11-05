@@ -98,8 +98,15 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
                 {scan.processed} / {scan.total || "?"}
               </span>
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-teal-100">
-              <div className="h-full rounded-full bg-teal-600 transition-all" style={{ width: `${pct}%` }} />
+            <div
+              className="aqua-progress"
+              role="progressbar"
+              aria-label="解析の進み具合"
+              aria-valuemin={0}
+              aria-valuemax={scan.total || 1}
+              aria-valuenow={scan.processed}
+            >
+              {pct > 0 && <div className="aqua-progress-bar aqua-teal" style={{ width: `${pct}%` }} />}
             </div>
           </div>
         )}

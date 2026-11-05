@@ -83,8 +83,15 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
                 {doneCount} / {total} 完了
               </p>
             </div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-stone-100">
-              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+            <div
+              className="aqua-progress mt-3"
+              role="progressbar"
+              aria-label="対応の進み具合"
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={doneCount}
+            >
+              {pct > 0 && <div className="aqua-progress-bar" style={{ width: `${pct}%` }} />}
             </div>
           </>
         )}
@@ -264,15 +271,23 @@ function Row({ f, bucket, scanId, root, platform, onStatus, notify, showVerb }: 
 }
 
 function Btn({ children, onClick, primary }: { children: React.ReactNode; onClick: () => void; primary?: boolean }) {
+  if (primary) {
+    // 「済」: Aqua 風の円形ジェルボタン（globals.css の .aqua）
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="aqua aqua-green mx-0.5 flex h-9 w-9 shrink-0 items-center justify-center text-sm"
+      >
+        <span>{children}</span>
+      </button>
+    );
+  }
   return (
     <button
       type="button"
       onClick={onClick}
-      className={
-        primary
-          ? "rounded-md bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
-          : "rounded-md bg-white px-2.5 py-1 text-xs text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50"
-      }
+      className="rounded-md bg-white px-2.5 py-1 text-xs text-stone-700 ring-1 ring-stone-200 hover:bg-stone-50"
     >
       {children}
     </button>
