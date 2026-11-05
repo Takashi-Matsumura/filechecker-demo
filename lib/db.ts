@@ -56,6 +56,12 @@ function open(): DatabaseSync {
   // 後から追加した列のマイグレーション
   const cols = db.prepare(`PRAGMA table_info(scans)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === "runner_pid")) db.exec(`ALTER TABLE scans ADD COLUMN runner_pid INTEGER`);
+  const fileCols = db.prepare(`PRAGMA table_info(files)`).all() as { name: string }[];
+  if (!fileCols.some((c) => c.name === "action_status")) {
+    // 社員の対応状況: todo=未対応 / done=対応した / skipped=対応しない
+    db.exec(`ALTER TABLE files ADD COLUMN action_status TEXT NOT NULL DEFAULT 'todo'`);
+    db.exec(`ALTER TABLE files ADD COLUMN action_at TEXT`);
+  }
   return db;
 }
 

@@ -355,7 +355,12 @@ export interface FileRow {
   risk: Level;
   is_stale: boolean;
   dup_of: number | null;
+  action_status: ActionStatus;
+  action_at: string | null;
 }
+
+export type ActionStatus = "todo" | "done" | "skipped";
+export const ACTION_STATUSES: readonly ActionStatus[] = ["todo", "done", "skipped"];
 
 function toFile(r: Record<string, unknown>): FileRow {
   return {
@@ -399,4 +404,43 @@ export function getDuplicates(scanId: number, file: FileRow): { id: number; rel_
   return db()
     .prepare(`SELECT id, rel_path FROM files WHERE scan_id=? AND (id=? OR dup_of=?) AND id<>? ORDER BY id`)
     .all(scanId, rep, rep, file.id) as { id: number; rel_path: string }[];
+}
+
+// ---------------------------------------------------------------- 社員の対応状況
+
+/** 「対応した」「対応しない」「未対応に戻す」を記録する。ファイルそのものには触れない */
+export function setActionStatus(scanId: number, fileId: number, status: ActionStatus): boolean {
+  const r = db()
+    .prepare(`UPDATE files SET action_status=?, action_at=? WHERE id=? AND scan_id=?`)
+    .run(status, status === "todo" ? null : new Date().toISOString(), fileId, scanId);
+  return r.changes > 0;
+}
+
+/**
+ * ファイル ID から実体パスを求める。クライアントからパスは受け取らない。
+ * スキャン時のルート配下で、かつ現在も許可ルート配下にあることを確認する（リンクの差し替え対策）。
+ */
+export async function resolveFilePath(scanId: number, fileId: number): Promise<string | null> {
+  const row = db()
+    .prepare(`SELECT s.root AS root, f.rel_path AS rel FROM files f JOIN scans s ON s.id = f.scan_id WHERE f.id=? AND f.scan_id=?`)
+    .get(fileId, scanId) as { root: string; rel: string } | undefined;
+  if (!row) return null;
+  const joined = path.resolve(row.root, row.rel);
+  let real: string;
+  try {
+    real = await fs.realpath(joined);
+  } catch {
+    return null; // 既に移動・削除されている
+  }
+  const inside = (base: string) => {
+    const rel = path.relative(base, real);
+    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  };
+  if (!inside(row.root)) return null;
+  try {
+    await resolveScanRoot(path.dirname(real)); // 許可ルート配下かを再確認
+  } catch {
+    return null;
+  }
+  return real;
 }
