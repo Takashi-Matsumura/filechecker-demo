@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
@@ -91,9 +92,12 @@ export function pauseScan(scanId: number): "ok" | "not_running" {
 }
 
 /** 中断したスキャンを再開する。終わったファイルはやり直さない */
-export function resumeScan(scanId: number): "ok" | "not_paused" {
+export async function resumeScan(scanId: number): Promise<"ok" | "not_paused" | "not_allowed"> {
   const row = db().prepare(`SELECT * FROM scans WHERE id=?`).get(scanId) as ScanRow | undefined;
   if (!row || reconcile(row).status !== "paused") return "not_paused";
+  // 中断している間に、ルートが許可範囲の外になっていないか（リンクの差し替え・設定変更）を確認し直す
+  const real = await resolveScanRoot(row.root).catch(() => null);
+  if (real !== row.root) return "not_allowed";
   // 1回の UPDATE で状態を切り替え、二重に再開されないようにする
   const r = db()
     .prepare(`UPDATE scans SET status='processing', runner_pid=?, error=NULL, finished_at=NULL WHERE id=? AND status='paused'`)
@@ -243,8 +247,10 @@ async function runScan(scanId: number, root: string, signal: AbortSignal) {
   const worker = async () => {
     while (next < jobs.length && !signal.aborted) {
       const job = jobs[next++];
-      const abs = path.join(root, job.rel_path);
       try {
+        // 読む直前にパスを検証する（スキャン後・再開までの間の差し替え対策）
+        const abs = await safeFilePath(root, job.rel_path);
+        if (!abs) throw new Error("ファイルが見つからないか、スキャン対象の範囲外に変わったため処理しませんでした");
         if (job.dup_of === null || !(await copyFromRepresentative(job.id, job.dup_of, signal))) {
           await processFile(job.id, abs, job.ext, signal);
         }
@@ -326,7 +332,7 @@ async function processFile(id: number, abs: string, ext: string, signal: AbortSi
   if (row.size > config.maxReadBytes) {
     notes.push("サイズが大きいため内容は未検査");
   } else {
-    const buf = await fs.readFile(abs);
+    const buf = await readFileNoFollow(abs);
     const r = await extract(buf, ext, signal);
     text = r.text;
     method = r.method;
@@ -504,22 +510,45 @@ export async function resolveFilePath(scanId: number, fileId: number): Promise<s
     .prepare(`SELECT s.root AS root, f.rel_path AS rel FROM files f JOIN scans s ON s.id = f.scan_id WHERE f.id=? AND f.scan_id=?`)
     .get(fileId, scanId) as { root: string; rel: string } | undefined;
   if (!row) return null;
-  const joined = path.resolve(row.root, row.rel);
+  return safeFilePath(row.root, row.rel);
+}
+
+/**
+ * スキャン時に記録した相対パスを、読む直前に検証してから実体パスを返す。
+ * スキャン後（特に中断〜再開の間）に、ファイルや途中のフォルダが許可範囲の外を指す
+ * シンボリックリンクに差し替えられていないかを確認する。
+ *   - 実体パスがスキャンのルート配下にあること
+ *   - 実体パスが現在も許可ルート配下にあること
+ *   - 通常のファイルであること（最後の要素がシンボリックリンクでない）
+ * 満たさなければ null。
+ */
+async function safeFilePath(root: string, rel: string): Promise<string | null> {
+  const joined = path.resolve(root, rel);
   let real: string;
   try {
+    const st = await fs.lstat(joined);
+    if (!st.isFile()) return null; // シンボリックリンクやフォルダに変わっている
     real = await fs.realpath(joined);
   } catch {
     return null; // 既に移動・削除されている
   }
-  const inside = (base: string) => {
-    const rel = path.relative(base, real);
-    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-  };
-  if (!inside(row.root)) return null;
+  const relToRoot = path.relative(root, real);
+  if (relToRoot === "" || relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) return null;
   try {
     await resolveScanRoot(path.dirname(real)); // 許可ルート配下かを再確認
   } catch {
     return null;
   }
   return real;
+}
+
+/** 最後の要素がシンボリックリンクなら開かない（検証から読み込みまでの間の差し替え対策） */
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+async function readFileNoFollow(file: string): Promise<Buffer> {
+  const fh = await fs.open(file, fsConstants.O_RDONLY | O_NOFOLLOW);
+  try {
+    return await fh.readFile();
+  } finally {
+    await fh.close();
+  }
 }
