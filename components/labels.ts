@@ -29,6 +29,8 @@ export const STATUS: Record<string, string> = {
   queued: "待機中",
   walking: "ファイル一覧を作成中",
   processing: "解析中",
+  pausing: "中断しています…",
+  paused: "中断中",
   done: "完了",
   error: "エラー",
 };

@@ -9,6 +9,9 @@ import { ScanAnalysis } from "./scan-dashboard";
 
 type Tab = "actions" | "analysis";
 
+/** 実行中（ポーリングを続ける）状態 */
+const RUNNING = new Set(["queued", "walking", "processing", "pausing"]);
+
 /** 棚卸し結果のページ。データ取得とポーリングを受け持ち、「やること」と「詳しい分析」を切り替える */
 export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -19,6 +22,10 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
     dataRef.current = data;
   }, [data]);
   const [notFound, setNotFound] = useState(false);
+  // 再開したときにポーリングをやり直すためのキー
+  const [pollKey, setPollKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [opError, setOpError] = useState<string | null>(null);
   // URL の #analysis で「詳しい分析」タブを直接開ける。サーバ側ではデータ未取得のため描画されず、不一致は起きない
   const [tab, setTabState] = useState<Tab>(() =>
     typeof window !== "undefined" && window.location.hash === "#analysis" ? "analysis" : "actions",
@@ -40,14 +47,27 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
       const j: ScanData = await res.json();
       if (stop) return;
       setData(j);
-      if (j.scan.status !== "done" && j.scan.status !== "error") timer = setTimeout(load, 2000);
+      if (RUNNING.has(j.scan.status)) timer = setTimeout(load, 2000);
     };
     load().catch(() => {});
     return () => {
       stop = true;
       clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, pollKey]);
+
+  /** 中断 / 再開。状態はサーバが持つので、操作後はポーリングで最新を取り直す */
+  const control = useCallback(
+    async (action: "pause" | "resume") => {
+      setBusy(true);
+      setOpError(null);
+      const res = await fetch(`/api/scans/${id}/${action}`, { method: "POST" }).catch(() => null);
+      if (!res?.ok) setOpError((await res?.json().catch(() => null))?.error ?? "操作できませんでした");
+      setPollKey((k) => k + 1);
+      setBusy(false);
+    },
+    [id],
+  );
 
   // 押した瞬間に画面へ反映し、保存に失敗したら元に戻す
   const setStatus = useCallback(
@@ -70,7 +90,8 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   if (!data) return <p className="text-sm text-stone-400">読み込み中…</p>;
 
   const { scan } = data;
-  const analyzing = scan.status !== "done" && scan.status !== "error";
+  const analyzing = RUNNING.has(scan.status);
+  const paused = scan.status === "paused";
   const pct = scan.total ? Math.round((scan.processed / scan.total) * 100) : 0;
 
   return (
@@ -92,11 +113,19 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
 
         {analyzing && (
           <div className="rounded-xl border border-teal-200 bg-teal-50/60 px-4 py-3">
-            <div className="mb-1.5 flex justify-between text-xs text-teal-900">
+            <div className="mb-2 flex items-center justify-between gap-3 text-xs text-teal-900">
               <span>{STATUS[scan.status] ?? scan.status}</span>
-              <span className="tabular-nums">
+              <span className="ml-auto tabular-nums">
                 {scan.processed} / {scan.total || "?"}
               </span>
+              <button
+                type="button"
+                onClick={() => control("pause")}
+                disabled={busy || scan.status === "pausing"}
+                className="rounded-md bg-white px-2.5 py-1 text-xs text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {scan.status === "pausing" ? "中断しています…" : "中断"}
+              </button>
             </div>
             <div
               className="aqua-progress"
@@ -110,6 +139,22 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
             </div>
           </div>
         )}
+        {paused && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-amber-900">
+                中断中 <span className="ml-1 font-normal tabular-nums">{scan.processed} / {scan.total || "?"} 件 完了</span>
+              </p>
+              <p className="text-xs text-amber-800">
+                {scan.error ?? "再開すると、残りのファイルだけを解析します。"}
+              </p>
+            </div>
+            <button type="button" onClick={() => control("resume")} disabled={busy} className="aqua aqua-teal px-6 py-1.5 text-sm">
+              <span>{busy ? "再開しています…" : "再開"}</span>
+            </button>
+          </div>
+        )}
+        {opError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{opError}</p>}
         {scan.status === "error" && (
           <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">エラー: {scan.error}</p>
         )}
@@ -137,7 +182,7 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
       </div>
 
       {tab === "actions" ? (
-        <ActionList data={data} onStatus={setStatus} analyzing={analyzing} />
+        <ActionList data={data} onStatus={setStatus} incomplete={analyzing || paused} paused={paused} />
       ) : (
         <ScanAnalysis data={data} />
       )}

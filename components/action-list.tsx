@@ -20,11 +20,13 @@ type Status = FileItem["action_status"];
 interface Props {
   data: ScanData;
   onStatus: (fileId: number, status: Status) => void;
-  analyzing: boolean;
+  /** 解析が終わっていない（実行中または中断中） */
+  incomplete: boolean;
+  paused: boolean;
 }
 
 /** 「次に何をすればいいか」だけを見せる画面 */
-export function ActionList({ data, onStatus, analyzing }: Props) {
+export function ActionList({ data, onStatus, incomplete, paused }: Props) {
   const [showDone, setShowDone] = useState(false);
   const [toast, setToast] = useState<{ id: number; msg: string; undo?: () => void } | null>(null);
 
@@ -55,7 +57,7 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
   const total = view.actionable.length;
   const doneCount = view.handled.length;
   const pct = total ? Math.round((doneCount / total) * 100) : 0;
-  const allDone = !analyzing && total > 0 && view.todo.length === 0;
+  const allDone = !incomplete && total > 0 && view.todo.length === 0;
 
   return (
     <div className="space-y-6">
@@ -71,7 +73,7 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
               <p className="text-xs text-stone-500">{total}件を確認しました。おつかれさまでした。</p>
             </div>
           </div>
-        ) : total === 0 && !analyzing ? (
+        ) : total === 0 && !incomplete ? (
           <p className="font-semibold">対応が必要なファイルはありません</p>
         ) : (
           <>
@@ -130,7 +132,13 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
         );
       })}
 
-      {analyzing && <p className="text-xs text-stone-500">解析中です。見つかったものから順に追加されます。</p>}
+      {incomplete && (
+        <p className="text-xs text-stone-500">
+          {paused
+            ? "解析が中断されています。再開すると、残りのファイルも解析してここに追加します。"
+            : "解析中です。見つかったものから順に追加されます。"}
+        </p>
+      )}
 
       {/* 問題なし・対応済み */}
       <div className="space-y-2 text-sm text-stone-500">

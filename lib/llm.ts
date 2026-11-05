@@ -12,6 +12,8 @@ type Content =
 interface ChatOptions {
   maxTokens?: number;
   jsonSchema?: Record<string, unknown>;
+  /** 中断用。接続を切ると llama-server 側の生成も止まる */
+  signal?: AbortSignal;
 }
 
 // llama-server の --parallel を超えないための簡易セマフォ
@@ -46,8 +48,11 @@ function release() {
 }
 
 async function chat(system: string, user: Content, opts: ChatOptions = {}): Promise<string> {
+  opts.signal?.throwIfAborted();
   await acquire();
   try {
+    // 順番待ちの間に中断された場合は、LLM に投げずに終える
+    opts.signal?.throwIfAborted();
     const body: Record<string, unknown> = {
       messages: [
         { role: "system", content: system },
@@ -68,7 +73,9 @@ async function chat(system: string, user: Content, opts: ChatOptions = {}): Prom
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(config.llmTimeoutMs),
+      signal: opts.signal
+        ? AbortSignal.any([opts.signal, AbortSignal.timeout(config.llmTimeoutMs)])
+        : AbortSignal.timeout(config.llmTimeoutMs),
     });
     if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const json = (await res.json()) as { choices: { message: { content: string } }[] };
@@ -108,7 +115,7 @@ export async function llmStatus(): Promise<LlmStatus> {
 
 // ---------------------------------------------------------------- OCR
 
-export async function ocrImage(jpeg: Uint8Array): Promise<string> {
+export async function ocrImage(jpeg: Uint8Array, signal?: AbortSignal): Promise<string> {
   const url = `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`;
   return chat(
     "あなたは OCR エンジンです。画像に写っている文字を、読み取れる範囲ですべて書き起こしてください。表は1行1項目で「項目 値」の形にしてください。説明や前置きは書かないでください。",
@@ -116,7 +123,7 @@ export async function ocrImage(jpeg: Uint8Array): Promise<string> {
       { type: "text", text: "この画像の文字をすべて書き起こしてください。" },
       { type: "image_url", image_url: { url } },
     ],
-    { maxTokens: 2048 },
+    { maxTokens: 2048, signal },
   );
 }
 
@@ -163,7 +170,7 @@ export interface JudgeInput {
   text: string;
 }
 
-export async function judgeFile(input: JudgeInput): Promise<AiJudgement> {
+export async function judgeFile(input: JudgeInput, signal?: AbortSignal): Promise<AiJudgement> {
   const system = `あなたは社内ファイルの棚卸しを手伝うアシスタントです。
 与えられたファイル情報と本文（一部マスク済み）から、内容の要約・分類・個人情報や機密情報の有無・推奨アクションを判断します。
 
@@ -188,6 +195,6 @@ person_names には本文中に出てくる個人の氏名だけを入れる（�
 """
 ${input.text || "（本文なし）"}
 """`;
-  const raw = await chat(system, user, { maxTokens: 700, jsonSchema: JUDGE_SCHEMA });
+  const raw = await chat(system, user, { maxTokens: 700, jsonSchema: JUDGE_SCHEMA, signal });
   return JSON.parse(raw) as AiJudgement;
 }
