@@ -26,7 +26,7 @@ interface Props {
 /** 「次に何をすればいいか」だけを見せる画面 */
 export function ActionList({ data, onStatus, analyzing }: Props) {
   const [showDone, setShowDone] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ id: number; msg: string; undo?: () => void } | null>(null);
 
   const view = useMemo(() => {
     const actionable = data.files
@@ -44,10 +44,13 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
     return { actionable, todo, handled, top, groups, okCount };
   }, [data]);
 
-  const notify = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 2500);
+  // 「元に戻す」付きの通知は長めに表示する
+  const notify: Notify = (msg, undo) => {
+    const id = Date.now() + Math.random();
+    setToast({ id, msg, undo });
+    setTimeout(() => setToast((cur) => (cur?.id === id ? null : cur)), undo ? 6000 : 2500);
   };
+  const platform = data.platform ?? { os: "mac" as const, revealLabel: "Finderで表示", sep: "/" };
 
   const total = view.actionable.length;
   const doneCount = view.handled.length;
@@ -93,7 +96,7 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
           <h2 className="text-sm font-bold">まずこの{view.top.length}件</h2>
           <ul className="overflow-hidden rounded-xl border-2 border-stone-900/80 bg-white">
             {view.top.map(({ f, bucket }) => (
-              <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} onStatus={onStatus} notify={notify} showVerb />
+              <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} platform={platform} onStatus={onStatus} notify={notify} showVerb />
             ))}
           </ul>
         </section>
@@ -113,7 +116,7 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
             </div>
             <ul className="overflow-hidden rounded-xl border border-stone-200 bg-white">
               {g.items.map(({ f, bucket }) => (
-                <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} onStatus={onStatus} notify={notify} />
+                <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} platform={platform} onStatus={onStatus} notify={notify} />
               ))}
             </ul>
           </section>
@@ -128,12 +131,12 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
         {view.handled.length > 0 && (
           <div>
             <button onClick={() => setShowDone((v) => !v)} className="text-stone-600 underline underline-offset-2">
-              {showDone ? "▾" : "▸"} 対応済み・対応しない {view.handled.length}件
+              {showDone ? "▾" : "▸"} 対応済み・対応しない {view.handled.length}件（ここから戻せます）
             </button>
             {showDone && (
               <ul className="mt-2 overflow-hidden rounded-xl border border-stone-200 bg-white">
                 {view.handled.map(({ f, bucket }) => (
-                  <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} onStatus={onStatus} notify={notify} showVerb />
+                  <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} platform={platform} onStatus={onStatus} notify={notify} showVerb />
                 ))}
               </ul>
             )}
@@ -142,8 +145,22 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
       </div>
 
       {toast && (
-        <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-lg bg-stone-900 px-4 py-2 text-sm text-white shadow-lg">
-          {toast}
+        <div
+          role="status"
+          className="fixed bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 rounded-lg bg-stone-900 px-4 py-2.5 text-sm text-white shadow-lg"
+        >
+          <span>{toast.msg}</span>
+          {toast.undo && (
+            <button
+              onClick={() => {
+                toast.undo?.();
+                setToast(null);
+              }}
+              className="font-semibold text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+            >
+              元に戻す
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -152,17 +169,20 @@ export function ActionList({ data, onStatus, analyzing }: Props) {
 
 // ---------------------------------------------------------------- 1行
 
+type Notify = (msg: string, undo?: () => void) => void;
+
 interface RowProps {
   f: FileItem;
   bucket: Exclude<Bucket, "ok">;
   scanId: number;
   root: string;
+  platform: NonNullable<ScanData["platform"]>;
   onStatus: (fileId: number, status: Status) => void;
-  notify: (msg: string) => void;
+  notify: Notify;
   showVerb?: boolean;
 }
 
-function Row({ f, bucket, scanId, root, onStatus, notify, showVerb }: RowProps) {
+function Row({ f, bucket, scanId, root, platform, onStatus, notify, showVerb }: RowProps) {
   const [open, setOpen] = useState(false);
   const b = BUCKETS[bucket];
   const handled = f.action_status !== "todo";
@@ -174,11 +194,18 @@ function Row({ f, bucket, scanId, root, onStatus, notify, showVerb }: RowProps) 
 
   async function copyPath() {
     try {
-      await navigator.clipboard.writeText(`${root}/${f.rel_path}`);
+      await navigator.clipboard.writeText(`${root}${platform.sep}${f.rel_path}`);
       notify("パスをコピーしました");
     } catch {
       notify("コピーできませんでした");
     }
+  }
+
+  // 押した直後に「元に戻す」を出す（間違えて押したとき用）
+  function mark(status: Exclude<Status, "todo">) {
+    const prev = f.action_status;
+    onStatus(f.id, status);
+    notify(`「${fileName(f.rel_path)}」を${status === "done" ? "対応済み" : "対応しない"}にしました`, () => onStatus(f.id, prev));
   }
 
   return (
@@ -208,12 +235,12 @@ function Row({ f, bucket, scanId, root, onStatus, notify, showVerb }: RowProps) 
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           {!handled ? (
             <>
-              <Btn onClick={reveal}>Finderで表示</Btn>
+              <Btn onClick={reveal}>{platform.revealLabel}</Btn>
               <Btn onClick={copyPath}>パスをコピー</Btn>
-              <Btn onClick={() => onStatus(f.id, "done")} primary>
+              <Btn onClick={() => mark("done")} primary>
                 済
               </Btn>
-              <Btn onClick={() => onStatus(f.id, "skipped")}>対応しない</Btn>
+              <Btn onClick={() => mark("skipped")}>対応しない</Btn>
             </>
           ) : (
             <>

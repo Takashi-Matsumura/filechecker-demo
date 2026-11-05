@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { ActionList } from "./action-list";
 import type { FileItem, ScanData } from "./actions";
 import { formatDateTime, STATUS } from "./labels";
@@ -13,6 +13,11 @@ type Tab = "actions" | "analysis";
 export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [data, setData] = useState<ScanData | null>(null);
+  // 「元に戻す」などで後から呼ばれても、常に最新の状態を参照できるようにする
+  const dataRef = useRef<ScanData | null>(null);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
   const [notFound, setNotFound] = useState(false);
   // URL の #analysis で「詳しい分析」タブを直接開ける。サーバ側ではデータ未取得のため描画されず、不一致は起きない
   const [tab, setTabState] = useState<Tab>(() =>
@@ -47,7 +52,7 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   // 押した瞬間に画面へ反映し、保存に失敗したら元に戻す
   const setStatus = useCallback(
     async (fileId: number, status: FileItem["action_status"]) => {
-      const prev = data?.files.find((f) => f.id === fileId)?.action_status ?? "todo";
+      const prev = dataRef.current?.files.find((f) => f.id === fileId)?.action_status ?? "todo";
       setData((d) => d && { ...d, files: d.files.map((f) => (f.id === fileId ? { ...f, action_status: status } : f)) });
       const res = await fetch(`/api/scans/${id}/files/${fileId}`, {
         method: "PATCH",
@@ -58,7 +63,7 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
         setData((d) => d && { ...d, files: d.files.map((f) => (f.id === fileId ? { ...f, action_status: prev } : f)) });
       }
     },
-    [id, data],
+    [id],
   );
 
   if (notFound) return <p className="text-sm text-stone-500">このスキャンは見つかりません。</p>;

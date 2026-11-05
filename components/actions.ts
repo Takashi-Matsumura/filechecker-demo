@@ -32,6 +32,8 @@ export interface ScanData {
     finished_at: string | null;
   };
   files: FileItem[];
+  /** サーバ（= 社員の PC）の OS に応じた表示 */
+  platform?: { os: "mac" | "windows" | "linux"; revealLabel: string; sep: string };
 }
 
 export type Bucket = "move" | "remove" | "tidy" | "check" | "ok";
@@ -120,5 +122,6 @@ export function priority(f: FileItem): number {
   return LEVEL_RANK[f.risk] * 1_000_000 + Math.min(critical, 99) * 10_000 + Math.min(others, 99) * 10 + bucketWeight[bucketOf(f)];
 }
 
-export const fileName = (rel: string) => rel.split("/").pop() ?? rel;
-export const folderOf = (rel: string) => rel.split("/").slice(0, -1).join("/") || ".";
+// Windows ではパス区切りが \ になるので両方で分割する
+export const fileName = (rel: string) => rel.split(/[\\/]/).pop() ?? rel;
+export const folderOf = (rel: string) => rel.split(/[\\/]/).slice(0, -1).join(" / ") || "（直下）";
