@@ -1,55 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { use, useEffect, useMemo, useState } from "react";
-import {
-  formatDate,
-  formatDateTime,
-  METHOD,
-  RECOMMENDATION,
-  RISK,
-  RISK_ORDER,
-  STATUS,
-  type Level,
-} from "./labels";
-
-interface Finding {
-  type: string;
-  label: string;
-  level: Level;
-  count: number;
-}
-
-interface FileItem {
-  id: number;
-  rel_path: string;
-  ext: string;
-  kind: string;
-  size: number;
-  mtime: string;
-  status: string;
-  error: string | null;
-  extract_method: string | null;
-  findings: Finding[];
-  ai: { summary?: string; category?: string; recommendation?: string } | null;
-  risk: Level;
-  is_stale: boolean;
-  dup_of: number | null;
-}
-
-interface ScanData {
-  scan: {
-    id: number;
-    root: string;
-    status: string;
-    total: number;
-    processed: number;
-    error: string | null;
-    created_at: string;
-    finished_at: string | null;
-  };
-  files: FileItem[];
-}
+import { useMemo, useState } from "react";
+import type { FileItem, ScanData } from "./actions";
+import { formatDate, METHOD, RECOMMENDATION, RISK, RISK_ORDER, type Level } from "./labels";
 
 type Filter = "all" | "high" | "medium" | "personal" | "dup" | "stale" | "issue";
 
@@ -84,35 +38,10 @@ function matches(f: FileItem, filter: Filter): boolean {
   }
 }
 
-export function ScanDashboard({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
-  const [data, setData] = useState<ScanData | null>(null);
-  const [notFound, setNotFound] = useState(false);
+/** 詳しい分析（集計とファイル一覧）。データの取得は親の ScanView が行う */
+export function ScanAnalysis({ data }: { data: ScanData }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
-
-  const finished = data?.scan.status === "done" || data?.scan.status === "error";
-
-  useEffect(() => {
-    let stop = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      const res = await fetch(`/api/scans/${id}`);
-      if (res.status === 404) {
-        setNotFound(true);
-        return;
-      }
-      const j: ScanData = await res.json();
-      if (stop) return;
-      setData(j);
-      if (j.scan.status !== "done" && j.scan.status !== "error") timer = setTimeout(load, 2000);
-    };
-    load().catch(() => {});
-    return () => {
-      stop = true;
-      clearTimeout(timer);
-    };
-  }, [id]);
 
   const stats = useMemo(() => {
     const files = data?.files ?? [];
@@ -153,51 +82,11 @@ export function ScanDashboard({ params }: { params: Promise<{ id: string }> }) {
       .sort((a, b) => RISK_ORDER[b.risk] - RISK_ORDER[a.risk] || a.rel_path.localeCompare(b.rel_path, "ja"));
   }, [data, filter, q]);
 
-  if (notFound) return <p className="text-sm text-stone-500">このスキャンは見つかりません。</p>;
-  if (!data) return <p className="text-sm text-stone-400">読み込み中…</p>;
-
   const { scan } = data;
-  const pct = scan.total ? Math.round((scan.processed / scan.total) * 100) : 0;
   const maxTypeFiles = Math.max(1, ...stats.byType.map((t) => t.files));
 
   return (
     <div className="space-y-8">
-      <div className="space-y-3">
-        <Link href="/" className="text-xs text-teal-700 underline underline-offset-2">
-          ← ホーム
-        </Link>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-bold tracking-tight">棚卸し結果</h1>
-            <p className="truncate font-mono text-xs text-stone-500">{scan.root}</p>
-          </div>
-          <p className="text-xs text-stone-500">
-            開始 {formatDateTime(scan.created_at)}
-            {scan.finished_at && ` · 完了 ${formatDateTime(scan.finished_at)}`}
-          </p>
-        </div>
-
-        {!finished && (
-          <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-4">
-            <div className="mb-2 flex justify-between text-sm">
-              <span className="font-medium text-teal-900">{STATUS[scan.status] ?? scan.status}</span>
-              <span className="tabular-nums text-teal-900">
-                {scan.processed} / {scan.total || "?"}（{pct}%）
-              </span>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-teal-100">
-              <div className="h-full rounded-full bg-teal-600 transition-all" style={{ width: `${pct}%` }} />
-            </div>
-            <p className="mt-2 text-xs text-teal-800">
-              スキャン書類や画像はローカル LLM で文字を読み取るため、1枚あたり数十秒かかることがあります。
-            </p>
-          </div>
-        )}
-        {scan.status === "error" && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">エラー: {scan.error}</p>
-        )}
-      </div>
-
       {/* サマリ */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="ファイル数" value={stats.total} />
