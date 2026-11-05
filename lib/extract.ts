@@ -184,7 +184,7 @@ function unpdf() {
   return pdfjsReady;
 }
 
-async function extractPdf(buf: Buffer): Promise<Extracted> {
+async function extractPdf(buf: Buffer, signal?: AbortSignal): Promise<Extracted> {
   const { getDocumentProxy, extractText, renderPageAsImage } = await unpdf();
   const doc = await getDocumentProxy(new Uint8Array(buf));
   const { text, totalPages } = await extractText(doc, { mergePages: false });
@@ -196,6 +196,7 @@ async function extractPdf(buf: Buffer): Promise<Extracted> {
   const pages = Math.min(totalPages, config.maxOcrPages);
   const out: string[] = [];
   for (let i = 1; i <= pages; i++) {
+    signal?.throwIfAborted();
     // 描画サイズに上限を設ける（ページサイズを巨大に申告した PDF 対策）
     const vp = (await doc.getPage(i)).getViewport({ scale: 1 });
     const scale = Math.min(1.5, Math.sqrt(config.maxRenderPixels / Math.max(1, vp.width * vp.height)));
@@ -203,7 +204,7 @@ async function extractPdf(buf: Buffer): Promise<Extracted> {
       canvasImport: () => import("@napi-rs/canvas"),
       scale,
     });
-    out.push(await ocrImage(await toJpeg(png)));
+    out.push(await ocrImage(await toJpeg(png), signal));
   }
   return {
     text: out.join("\n"),
@@ -214,16 +215,16 @@ async function extractPdf(buf: Buffer): Promise<Extracted> {
 
 // ---------------------------------------------------------------- 入口
 
-export async function extract(buf: Buffer, ext: string): Promise<Extracted> {
+export async function extract(buf: Buffer, ext: string, signal?: AbortSignal): Promise<Extracted> {
   try {
-    return await extractInner(buf, ext);
+    return await extractInner(buf, ext, signal);
   } catch (e) {
     if (e instanceof ExtractLimitError) return { text: "", method: "none", note: e.message };
     throw e;
   }
 }
 
-async function extractInner(buf: Buffer, ext: string): Promise<Extracted> {
+async function extractInner(buf: Buffer, ext: string, signal?: AbortSignal): Promise<Extracted> {
   const kind = kindOf(ext);
   let r: Extracted;
   switch (kind) {
@@ -235,10 +236,10 @@ async function extractInner(buf: Buffer, ext: string): Promise<Extracted> {
       r = { text: extractOffice(buf, ext), method: "office" };
       break;
     case "pdf":
-      r = await extractPdf(buf);
+      r = await extractPdf(buf, signal);
       break;
     case "image":
-      r = { text: await ocrImage(await toJpeg(buf)), method: "ocr" };
+      r = { text: await ocrImage(await toJpeg(buf), signal), method: "ocr" };
       break;
     default:
       return { text: "", method: "none", note: "未対応の形式（メタ情報のみ）" };

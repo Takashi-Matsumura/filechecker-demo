@@ -36,7 +36,14 @@ export async function resolveScanRoot(input: string): Promise<string> {
 
 // ---------------------------------------------------------------- 実行管理
 
-const IN_PROGRESS = new Set(["queued", "walking", "processing"]);
+/**
+ * スキャンの状態:
+ *   queued → walking（一覧作成）→ processing（解析）→ done
+ *   実行中に「中断」→ pausing（処理中のファイルを打ち切り中）→ paused
+ *   paused から「再開」→ processing（未処理のファイルだけ解析）
+ *   サーバが止まった場合も paused として扱い、再開できる
+ */
+const RUNNING = new Set(["queued", "walking", "processing", "pausing"]);
 
 function isAlive(pid: number | null): boolean {
   if (!pid) return false;
@@ -49,16 +56,18 @@ function isAlive(pid: number | null): boolean {
 }
 
 /**
- * 実行プロセスが既に居ない進行中スキャンを「中断」にする。
+ * 実行プロセスが既に居ない実行中スキャンを「中断」（再開可能）にする。
  * 注意: モジュール読み込み時に実行してはいけない。Next の dev は検証用の短命ワーカーでも
  * ルートを評価するため、そこで走ると実行中のスキャンを誤って中断扱いにする。
  */
 function reconcile(scan: ScanRow): ScanRow {
-  if (!IN_PROGRESS.has(scan.status) || isAlive(scan.runner_pid)) return scan;
-  const error = "サーバ停止により中断されました";
-  db().prepare(`UPDATE scans SET status='error', error=? WHERE id=? AND status=?`).run(error, scan.id, scan.status);
-  return { ...scan, status: "error", error };
+  if (!RUNNING.has(scan.status) || isAlive(scan.runner_pid)) return scan;
+  const error = "サーバ停止により中断されました。再開できます";
+  db().prepare(`UPDATE scans SET status='paused', error=? WHERE id=? AND status=?`).run(error, scan.id, scan.status);
+  return { ...scan, status: "paused", error };
 }
+
+class PausedError extends Error {}
 
 export function startScan(root: string): number {
   const now = new Date().toISOString();
@@ -66,12 +75,67 @@ export function startScan(root: string): number {
     .prepare(`INSERT INTO scans (root, status, runner_pid, created_at) VALUES (?, 'queued', ?, ?)`)
     .run(root, process.pid, now);
   const id = Number(lastInsertRowid);
-  void runScan(id, root).catch((e) => {
-    db()
-      .prepare(`UPDATE scans SET status='error', error=?, finished_at=? WHERE id=?`)
-      .run(e instanceof Error ? e.message : String(e), new Date().toISOString(), id);
-  });
+  launch(id, root);
   return id;
+}
+
+/** 中断を要求する。処理中のファイルは打ち切り、未処理に戻す */
+export function pauseScan(scanId: number): "ok" | "not_running" {
+  const row = db().prepare(`SELECT * FROM scans WHERE id=?`).get(scanId) as ScanRow | undefined;
+  if (!row) return "not_running";
+  if (reconcile(row).status === "paused") return "ok"; // 既に止まっている
+  const r = db()
+    .prepare(`UPDATE scans SET status='pausing' WHERE id=? AND status IN ('queued','walking','processing')`)
+    .run(scanId);
+  return r.changes > 0 || row.status === "pausing" ? "ok" : "not_running";
+}
+
+/** 中断したスキャンを再開する。終わったファイルはやり直さない */
+export function resumeScan(scanId: number): "ok" | "not_paused" {
+  const row = db().prepare(`SELECT * FROM scans WHERE id=?`).get(scanId) as ScanRow | undefined;
+  if (!row || reconcile(row).status !== "paused") return "not_paused";
+  // 1回の UPDATE で状態を切り替え、二重に再開されないようにする
+  const r = db()
+    .prepare(`UPDATE scans SET status='processing', runner_pid=?, error=NULL, finished_at=NULL WHERE id=? AND status='paused'`)
+    .run(process.pid, scanId);
+  if (r.changes === 0) return "not_paused";
+  launch(scanId, row.root);
+  return "ok";
+}
+
+/** バックグラウンドで実行し、中断要求（DB の pausing）を監視して打ち切る */
+function launch(scanId: number, root: string) {
+  const controller = new AbortController();
+  const d = db();
+  const isPausing = () =>
+    (d.prepare(`SELECT status FROM scans WHERE id=?`).get(scanId) as { status: string } | undefined)?.status === "pausing";
+  // 別のモジュールインスタンスから中断されても止まるよう、DB を1秒ごとに確認する
+  const watcher = setInterval(() => {
+    if (!controller.signal.aborted && isPausing()) controller.abort(new PausedError());
+  }, 1000);
+
+  void runScan(scanId, root, controller.signal)
+    .then(() => {
+      const pending = (d.prepare(`SELECT COUNT(*) AS n FROM files WHERE scan_id=? AND status='pending'`).get(scanId) as { n: number }).n;
+      const walked = (d.prepare(`SELECT walked FROM scans WHERE id=?`).get(scanId) as { walked: number }).walked;
+      if (walked && pending === 0) {
+        d.prepare(`UPDATE scans SET status='done', error=NULL, finished_at=? WHERE id=?`).run(new Date().toISOString(), scanId);
+      } else {
+        d.prepare(`UPDATE scans SET status='paused' WHERE id=?`).run(scanId);
+      }
+    })
+    .catch((e) => {
+      if (controller.signal.aborted) {
+        d.prepare(`UPDATE scans SET status='paused' WHERE id=?`).run(scanId);
+        return;
+      }
+      d.prepare(`UPDATE scans SET status='error', error=?, finished_at=? WHERE id=?`).run(
+        e instanceof Error ? e.message : String(e),
+        new Date().toISOString(),
+        scanId,
+      );
+    })
+    .finally(() => clearInterval(watcher));
 }
 
 // ---------------------------------------------------------------- 走査
@@ -81,10 +145,11 @@ interface Entry {
   rel: string;
 }
 
-async function walk(root: string): Promise<Entry[]> {
+async function walk(root: string, signal: AbortSignal): Promise<Entry[]> {
   const out: Entry[] = [];
   async function rec(dir: string) {
     if (out.length >= config.maxFiles) return;
+    signal.throwIfAborted();
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
@@ -116,10 +181,12 @@ async function sha256(file: string): Promise<string> {
   return h.digest("hex");
 }
 
-async function runScan(scanId: number, root: string) {
+/** ファイル一覧を作り、ハッシュ・重複・古さを記録する。中断されたら途中の一覧は捨てて最初からやり直す */
+async function buildFileList(scanId: number, root: string, signal: AbortSignal) {
   const d = db();
-  d.prepare(`UPDATE scans SET status='walking' WHERE id=?`).run(scanId);
-  const entries = await walk(root);
+  d.prepare(`UPDATE scans SET status='walking' WHERE id=? AND status<>'pausing'`).run(scanId);
+  d.prepare(`DELETE FROM files WHERE scan_id=?`).run(scanId);
+  const entries = await walk(root, signal);
 
   const staleBefore = new Date();
   staleBefore.setFullYear(staleBefore.getFullYear() - config.staleYears);
@@ -130,9 +197,9 @@ async function runScan(scanId: number, root: string) {
   );
   const byHash = new Map<string, { id: number; mtime: number; rel: string }[]>();
   const setDup = d.prepare(`UPDATE files SET dup_of=? WHERE id=?`);
-  const jobs: { id: number; abs: string; ext: string }[] = [];
 
   for (const e of entries) {
+    signal.throwIfAborted();
     const st = await fs.stat(e.abs);
     const ext = path.extname(e.abs).slice(1).toLowerCase();
     const hash = await sha256(e.abs).catch(() => null);
@@ -145,47 +212,56 @@ async function runScan(scanId: number, root: string) {
       list.push({ id, mtime: st.mtime.getTime(), rel: e.rel });
       byHash.set(hash, list);
     }
-    jobs.push({ id, abs: e.abs, ext });
   }
 
   // 同一内容のグループでは「更新日が最も古い → パスが短い」ものを原本とみなす
-  const repOf = new Map<number, number>();
   for (const list of byHash.values()) {
     if (list.length < 2) continue;
     list.sort((a, b) => a.mtime - b.mtime || a.rel.length - b.rel.length);
-    for (const dup of list.slice(1)) {
-      setDup.run(list[0].id, dup.id);
-      repOf.set(dup.id, list[0].id);
-    }
+    for (const dup of list.slice(1)) setDup.run(list[0].id, dup.id);
   }
-  // 重複は原本の結果を流用するので、原本を先に処理する
-  jobs.sort((a, b) => Number(repOf.has(a.id)) - Number(repOf.has(b.id)));
+  d.prepare(`UPDATE scans SET walked=1, total=? WHERE id=?`).run(entries.length, scanId);
+}
 
-  d.prepare(`UPDATE scans SET status='processing', total=? WHERE id=?`).run(jobs.length, scanId);
+async function runScan(scanId: number, root: string, signal: AbortSignal) {
+  const d = db();
+  const walked = (d.prepare(`SELECT walked FROM scans WHERE id=?`).get(scanId) as { walked: number }).walked;
+  if (!walked) await buildFileList(scanId, root, signal);
+  signal.throwIfAborted();
+
+  // 未処理のファイルだけを対象にする。重複は原本の結果を流用するので、原本を先に処理する
+  const jobs = d
+    .prepare(`SELECT id, rel_path, ext, dup_of FROM files WHERE scan_id=? AND status='pending' ORDER BY (dup_of IS NOT NULL), id`)
+    .all(scanId) as { id: number; rel_path: string; ext: string; dup_of: number | null }[];
+  d.prepare(
+    `UPDATE scans SET status='processing',
+       processed=(SELECT COUNT(*) FROM files WHERE scan_id=? AND status<>'pending') WHERE id=? AND status<>'pausing'`,
+  ).run(scanId, scanId);
 
   // LLM の並列数 + 1 本のワーカーで処理（LLM を使わないファイルを詰めるため1本多め）
   let next = 0;
   const worker = async () => {
-    while (next < jobs.length) {
+    while (next < jobs.length && !signal.aborted) {
       const job = jobs[next++];
-      const rep = repOf.get(job.id);
-      const run = async () => {
-        if (rep !== undefined && (await copyFromRepresentative(job.id, rep))) return;
-        await processFile(job.id, job.abs, job.ext);
-      };
-      await run().catch((e) => {
+      const abs = path.join(root, job.rel_path);
+      try {
+        if (job.dup_of === null || !(await copyFromRepresentative(job.id, job.dup_of, signal))) {
+          await processFile(job.id, abs, job.ext, signal);
+        }
+      } catch (e) {
+        // 中断で打ち切ったファイルは「未処理」のまま残し、再開時にやり直す
+        if (signal.aborted) return;
         d.prepare(`UPDATE files SET status='error', error=? WHERE id=?`).run(
           e instanceof Error ? e.message.slice(0, 500) : String(e),
           job.id,
         );
-      });
+      }
       d.prepare(`UPDATE scans SET processed = processed + 1 WHERE id=?`).run(scanId);
     }
   };
   const concurrency = await resolveConcurrency();
   await Promise.all(Array.from({ length: concurrency + 1 }, worker));
-
-  d.prepare(`UPDATE scans SET status='done', finished_at=? WHERE id=?`).run(new Date().toISOString(), scanId);
+  signal.throwIfAborted();
 }
 
 // ---------------------------------------------------------------- 重複ファイル
@@ -194,11 +270,12 @@ async function runScan(scanId: number, root: string) {
  * 内容が同一（SHA-256 一致）のファイルは、原本の解析結果をコピーして LLM 呼び出しを省く。
  * 原本がエラーだった場合は false を返し、通常の処理に回す。
  */
-async function copyFromRepresentative(id: number, repId: number): Promise<boolean> {
+async function copyFromRepresentative(id: number, repId: number, signal: AbortSignal): Promise<boolean> {
   const d = db();
   const deadline = Date.now() + config.llmTimeoutMs * 3;
   let rep: Record<string, unknown> | undefined;
   while (Date.now() < deadline) {
+    signal.throwIfAborted();
     rep = d.prepare(`SELECT * FROM files WHERE id=?`).get(repId) as Record<string, unknown> | undefined;
     if (!rep || rep.status !== "pending") break;
     await new Promise((r) => setTimeout(r, 500));
@@ -233,7 +310,7 @@ const FALLBACK_REC: Record<Level, AiJudgement["recommendation"]> = {
   none: "keep",
 };
 
-async function processFile(id: number, abs: string, ext: string) {
+async function processFile(id: number, abs: string, ext: string, signal: AbortSignal) {
   const d = db();
   const row = d.prepare(`SELECT rel_path, size, mtime, is_stale, dup_of FROM files WHERE id=?`).get(id) as {
     rel_path: string;
@@ -250,7 +327,7 @@ async function processFile(id: number, abs: string, ext: string) {
     notes.push("サイズが大きいため内容は未検査");
   } else {
     const buf = await fs.readFile(abs);
-    const r = await extract(buf, ext);
+    const r = await extract(buf, ext, signal);
     text = r.text;
     method = r.method;
     if (r.note) notes.push(r.note);
@@ -273,8 +350,10 @@ async function processFile(id: number, abs: string, ext: string) {
       extractMethod: method,
       ruleSummary,
       text: masked.slice(0, 6000),
-    });
+    }, signal);
   } catch (e) {
+    // 中断による打ち切りは失敗扱いにせず、呼び出し元で「未処理」に戻す
+    if (signal.aborted) throw e;
     notes.push(`AI 判定に失敗: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
   }
 

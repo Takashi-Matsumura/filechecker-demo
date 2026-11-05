@@ -21,7 +21,7 @@ function open(): DatabaseSync {
     CREATE TABLE IF NOT EXISTS scans (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       root        TEXT NOT NULL,
-      status      TEXT NOT NULL,          -- queued | walking | processing | done | error
+      status      TEXT NOT NULL,          -- queued | walking | processing | pausing | paused | done | error
       total       INTEGER NOT NULL DEFAULT 0,
       processed   INTEGER NOT NULL DEFAULT 0,
       error       TEXT,
@@ -56,6 +56,11 @@ function open(): DatabaseSync {
   // 後から追加した列のマイグレーション
   const cols = db.prepare(`PRAGMA table_info(scans)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === "runner_pid")) db.exec(`ALTER TABLE scans ADD COLUMN runner_pid INTEGER`);
+  if (!cols.some((c) => c.name === "walked")) {
+    // ファイル一覧の作成が終わったか（再開時に一覧を作り直すかの判定に使う）
+    db.exec(`ALTER TABLE scans ADD COLUMN walked INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`UPDATE scans SET walked=1 WHERE total > 0`);
+  }
   const fileCols = db.prepare(`PRAGMA table_info(files)`).all() as { name: string }[];
   if (!fileCols.some((c) => c.name === "action_status")) {
     // 社員の対応状況: todo=未対応 / done=対応した / skipped=対応しない
