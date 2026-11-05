@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // ネイティブモジュール / PDF.js はバンドルせず Node から直接読み込む
+  serverExternalPackages: ["@napi-rs/canvas", "pdfjs-dist", "unpdf"],
   experimental: {
     agentFeedback: true,
   },

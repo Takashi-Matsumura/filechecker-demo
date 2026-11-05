@@ -1,36 +1,184 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ファイル棚卸しアシスタント（デモ）
 
-## Getting Started
+人の手では整理しきれなくなった社内のファイル群を、**ローカルで動く生成 AI** の力を借りて棚卸しする Web アプリのデモです。
+フォルダを指定すると、個人情報や機密情報が含まれていそうなファイル、重複や古いファイルを洗い出し、ファイルごとに「どう扱うべきか」を提案します。
 
-First, run the development server:
+- Office（Word / Excel / PowerPoint）、PDF、**スキャンした書類や画像**まで読み取ります
+- AI は **この PC 上の llama.cpp で動かします**。ファイルの中身を外部に送信しません
+- 結果には生の個人情報を残しません（番号・連絡先・氏名はマスクして保存します）
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+> セキュリティ製品ではありません。「自分の PC や共有フォルダに、何がどこにあるか分からない」という状態を、短時間で見える化するための補助ツールです。
+
+## 画面
+
+### 1. フォルダを指定して棚卸しを開始
+
+ローカル LLM への接続状況と、画像の文字読み取りに対応しているかを表示します。
+
+![ホーム画面](docs/images/home.png)
+
+### 2. 棚卸し結果のダッシュボード
+
+リスクの高いファイル、個人情報を含むファイル、重複、3年以上更新のないファイルを集計します。
+一覧はリスクの高い順に並び、AI による要約・分類・推奨アクションを表示します。
+
+![ダッシュボード](docs/images/dashboard.png)
+
+### 3. ファイルの詳細（スキャン画像の例）
+
+スキャンした申込書をローカル LLM で文字に起こし、カード番号・連絡先・住所・氏名を検出しています。
+検出箇所も抜粋も、マスクした状態で表示します。
+
+![ファイル詳細（スキャン画像）](docs/images/file-detail-scan.png)
+
+### 4. ファイルの詳細（名簿・重複の例）
+
+マイナンバーを含む社員名簿です。内容が同じファイル（`社員名簿_最終版(1).xlsx`）も合わせて表示します。
+
+![ファイル詳細（名簿）](docs/images/file-detail-roster.png)
+
+> 画面写真は、`npm run testdata` で生成する**架空のデータ**を使っています。
+
+## 仕組み
+
+### 全体像
+
+すべての構成要素が 1 台の PC の中で完結しています。ブラウザ・Web サーバ・LLM サーバは、いずれも `127.0.0.1` だけで待ち受けます。
+
+```mermaid
+flowchart LR
+  U[ブラウザ] -->|フォルダを指定| W[Next.js<br/>127.0.0.1:3000]
+  W -->|ファイルを読む| F[(社内フォルダ)]
+  W -->|OCR・判定| L[llama-server<br/>gemma-4-12b + mmproj<br/>127.0.0.1:8080]
+  W -->|マスク済みの結果のみ| D[(SQLite)]
+  W -.->|外部への通信なし| X[インターネット]
+  style X stroke-dasharray: 5 5,color:#999
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 1ファイルの処理の流れ
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```mermaid
+flowchart TD
+  A[ファイル] --> H[SHA-256 で重複を判定<br/>更新日で古さを判定]
+  H -->|重複| R[原本の結果を流用<br/>推奨は「削除を検討」]
+  H --> E{形式}
+  E -->|docx / xlsx / pptx| O[ZIP 内の XML から文字を抽出]
+  E -->|PDF| P{文字が取れるか}
+  P -->|取れる| PT[テキスト層を抽出]
+  P -->|取れない＝スキャン| PI[ページを画像化]
+  E -->|jpg / png など| IM[画像]
+  PI --> OCR[ローカル AI ①<br/>OCR で文字起こし]
+  IM --> OCR
+  O --> RULE
+  PT --> RULE
+  OCR --> RULE[ルール検出<br/>マイナンバー・カード番号・口座<br/>身分証・電話・メール・住所・機密表示]
+  RULE --> MASK1[検出した番号や連絡先をマスク]
+  MASK1 --> AI[ローカル AI ②<br/>要約・分類・リスク・推奨アクション<br/>本文に出てくる氏名の推定]
+  AI --> MASK2[AI が見つけた氏名もマスク]
+  MASK2 --> DB[(マスク済みの抜粋・検出結果・<br/>AI の判断だけを保存)]
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### ローカル AI の関わり方
 
-## Learn More
+このアプリでは、AI に「何でも任せる」のではなく、**ルールで確実に判定できることはルールで、人の読解が必要なところだけを AI で**、と役割を分けています。
 
-To learn more about Next.js, take a look at the following resources:
+| 役割 | 何をするか | 入力 | 出力 |
+|---|---|---|---|
+| ① 文字起こし（OCR） | スキャン PDF のページや画像に写った文字を読み取る | 画像（長辺 1600px の JPEG） | テキスト |
+| ② 判定 | ファイルの要約・分類、個人情報や機密の有無、リスク、推奨アクションを決める | パス・更新日・ルール検出の結果・**マスク済みの本文**（先頭 6,000 字） | JSON（スキーマで形式を固定） |
+| ③ 氏名の推定 | 正規表現では拾えない「人の名前」を見つけ、マスクに使う | ②と同じ | 氏名のリスト（**保存せず、マスクにだけ使う**） |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+設計上のポイント:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **ルールで確実なものは AI に頼らない。** マイナンバーはチェックデジット、カード番号は Luhn で検証します。AI の判断が揺れても、これらの検出結果は変わりません。
+- **AI にはマスクした本文を渡す。** LLM はローカルですが、AI の出力（要約など）に生の番号が写り込んで保存されるのを防ぐためです。
+- **リスクは「ルール」と「AI」の高い方を採る。** 見落としを減らす方向に倒しています。
+- **重複は AI を使わずに決める。** 内容が同一（SHA-256 が一致）のファイルは、更新日が最も古いものを原本とし、それ以外は原本の結果を流用して「削除を検討」とします。
+- **AI の判断は参考情報です。** 最終的な扱いは担当者が決める前提です。
 
-## Deploy on Vercel
+### 推奨アクション
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| アクション | 意味 |
+|---|---|
+| アクセス制限 | 個人情報や機密を含み、業務上は必要そう。保護された場所へ移す |
+| 削除を検討 | 目的を終えていそう（古い・重複・一時的なコピー） |
+| アーカイブ | 個人情報などは無いが、古い・使われていない |
+| 要確認 | 判断材料が足りない。人が確認する |
+| そのまま | 問題なし |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 処理速度（実測）
+
+架空データ 21 ファイル（うち OCR 対象 4 件）を、Apple M5（GPU 10 コア）/ メモリ 32GB で処理したときの値です。
+
+| 構成 | 所要時間 | 生成トークン |
+|---|---:|---:|
+| 初期実装（思考モード ON・出力長の制限なし） | 約 640 秒 | — |
+| 思考モード OFF ＋ 出力長の制限、`--parallel 2` | 222〜257 秒 | 2,898 |
+| 同上で `--parallel 4` に変更 | 269〜288 秒 | 2,901 |
+| **`--parallel 2` ＋ 重複は AI を省略 ＋ 1行 JSON（現在）** | **183〜207 秒** | **1,805** |
+
+わかったこと:
+
+- 所要時間は、ほぼ **「生成トークン数 ÷ 生成速度（約 12 tok/s）」** で決まります。速くするには出力を短くするのが一番効きます。
+- このマシンでは、`--parallel` を増やしても全体の生成速度は伸びず、かえって遅くなりました。
+- gemma-4 の思考モードを切る（`chat_template_kwargs: { enable_thinking: false }`）と、判定 1 件が約 25 秒から約 2 秒に縮みます。
+- OCR は 1 枚あたり約 15〜17 秒かかります（ほとんどが文字起こしの生成時間です）。
+
+## 必要なもの
+
+- Node.js 24 以上
+- `llama-server`（llama.cpp 0.9.0 以上。gemma-4 の mmproj を読むには、これ以降のバージョンが必要です）
+- テストデータを作る場合は Python 3
+
+```sh
+llama-server -m gemma-4-12b-it-Q4_K_M.gguf --mmproj mmproj-F16.gguf \
+  --host 127.0.0.1 --port 8080 -c 32768 --parallel 2 --flash-attn on
+```
+
+## 起動
+
+```sh
+npm install
+npm run testdata   # デモ用の架空ファイル群を testdata/sample-files に生成
+npm run dev        # http://127.0.0.1:3000
+```
+
+## 設定（環境変数）
+
+| 変数 | 既定値 | 説明 |
+|---|---|---|
+| `LLM_BASE_URL` | `http://127.0.0.1:8080` | llama-server の URL |
+| `LLM_CONCURRENCY` | llama-server のスロット数 | LLM への同時リクエスト数。未指定なら `/props` の `total_slots` に合わせる |
+| `SCAN_ALLOWED_ROOTS` | ホームディレクトリ | スキャンを許可するフォルダ（`:` 区切りで複数指定） |
+| `SCAN_MAX_FILES` | `2000` | 1 回のスキャンで扱う最大ファイル数 |
+| `DB_PATH` | `data/filechecker.db` | 結果の保存先 |
+
+## ディレクトリ構成
+
+```
+app/                 画面と API（Next.js App Router）
+  api/scans/         スキャンの開始・一覧・結果取得
+  scans/[id]/        ダッシュボード、ファイル詳細
+components/          画面部品
+lib/
+  scanner.ts         走査・重複判定・処理の流れ
+  extract.ts         Office / PDF / 画像からの文字抽出
+  detect.ts          ルール検出とマスク
+  llm.ts             ローカル LLM（OCR・判定）
+  db.ts              SQLite
+proxy.ts             localhost 以外からのアクセスを拒否
+scripts/testdata/    架空テストデータの生成スクリプト
+```
+
+## 安全上の前提と制限
+
+- サーバは `127.0.0.1` だけで待ち受けます。さらに `proxy.ts` で、localhost 以外の Host と、別オリジンからの POST を拒否します。
+- **トンネル（cloudflared など）や LAN への公開はしないでください。** このアプリは、指定されたフォルダの中身を読み取ることができます。
+- スキャンできるのは `SCAN_ALLOWED_ROOTS` 配下だけです。シンボリックリンクはたどりません。
+- 氏名の検出は AI の推定に頼っているため、マスク漏れが起こり得ます。
+- 旧形式の Office（.doc / .xls / .ppt）は未対応で、メタ情報だけを記録します。
+- PDF の OCR は先頭 3 ページまでです。
+
+## ライセンス
+
+[MIT](LICENSE)

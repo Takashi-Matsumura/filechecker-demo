@@ -1,0 +1,65 @@
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { config } from "./config";
+
+/**
+ * 走査結果の保存先。
+ * 方針: 抽出した生テキストは保存しない。保存するのはメタ情報・マスク済みの抜粋・AI の判定だけ。
+ * （棚卸しツール自体が機密のコピーを抱え込まないため）
+ */
+
+const globalForDb = globalThis as unknown as { __fcDb?: DatabaseSync };
+
+function open(): DatabaseSync {
+  fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
+  const db = new DatabaseSync(config.dbPath);
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+
+    CREATE TABLE IF NOT EXISTS scans (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      root        TEXT NOT NULL,
+      status      TEXT NOT NULL,          -- queued | walking | processing | done | error
+      total       INTEGER NOT NULL DEFAULT 0,
+      processed   INTEGER NOT NULL DEFAULT 0,
+      error       TEXT,
+      runner_pid  INTEGER,                -- 実行中プロセスの PID（中断検知用）
+      created_at  TEXT NOT NULL,
+      finished_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS files (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      scan_id        INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+      rel_path       TEXT NOT NULL,
+      ext            TEXT NOT NULL,
+      kind           TEXT NOT NULL,       -- office | pdf | image | text | other
+      size           INTEGER NOT NULL,
+      mtime          TEXT NOT NULL,
+      sha256         TEXT,
+      status         TEXT NOT NULL,       -- pending | done | error
+      error          TEXT,
+      extract_method TEXT,                -- text | office | pdf-text | ocr | none
+      text_chars     INTEGER NOT NULL DEFAULT 0,
+      excerpt        TEXT,                -- マスク済みの抜粋
+      findings_json  TEXT NOT NULL DEFAULT '[]',
+      rule_level     TEXT NOT NULL DEFAULT 'none',
+      ai_json        TEXT,
+      risk           TEXT NOT NULL DEFAULT 'none',  -- high | medium | low | none
+      is_stale       INTEGER NOT NULL DEFAULT 0,
+      dup_of         INTEGER                -- 同一内容の代表ファイル id
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_scan ON files(scan_id);
+  `);
+  // 後から追加した列のマイグレーション
+  const cols = db.prepare(`PRAGMA table_info(scans)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === "runner_pid")) db.exec(`ALTER TABLE scans ADD COLUMN runner_pid INTEGER`);
+  return db;
+}
+
+export function db(): DatabaseSync {
+  if (!globalForDb.__fcDb) globalForDb.__fcDb = open();
+  return globalForDb.__fcDb;
+}
