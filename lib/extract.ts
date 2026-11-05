@@ -1,6 +1,17 @@
 import { unzipSync, strFromU8 } from "fflate";
 import { config } from "./config";
+import { probeImageSize } from "./image-size";
 import { ocrImage } from "./llm";
+
+/** 安全上の上限に引っかかったことを表す（ファイルは「内容未検査」として扱う） */
+export class ExtractLimitError extends Error {}
+
+/** Office 形式ごとに展開する XML（これ以外は展開しない） */
+const WANTED_ENTRIES: Record<string, RegExp> = {
+  docx: /^word\/(document|header\d*|footer\d*)\.xml$/,
+  pptx: /^ppt\/(slides\/slide|notesSlides\/notesSlide)\d+\.xml$/,
+  xlsx: /^xl\/(sharedStrings|worksheets\/sheet\d+)\.xml$/,
+};
 
 /**
  * ファイルからテキストを取り出す。
@@ -72,7 +83,22 @@ const byNumber = (a: string, b: string) =>
   Number(a.match(/(\d+)\.xml$/)?.[1] ?? 0) - Number(b.match(/(\d+)\.xml$/)?.[1] ?? 0);
 
 function extractOffice(buf: Buffer, ext: string): string {
-  const zip = unzipSync(new Uint8Array(buf));
+  // ZIP 爆弾対策: 必要な XML だけを展開し、申告された展開後サイズの合計と件数に上限を設ける。
+  // fflate は申告サイズ分しか出力しないので、申告値を偽られても展開量はこの上限を超えない。
+  const wanted = WANTED_ENTRIES[ext];
+  let total = 0;
+  let count = 0;
+  const zip = unzipSync(new Uint8Array(buf), {
+    filter: (f) => {
+      if (!wanted.test(f.name)) return false;
+      total += f.originalSize;
+      count++;
+      if (total > config.maxUnzippedBytes || count > config.maxZipEntries) {
+        throw new ExtractLimitError("展開後のサイズが大きすぎるため内容は未検査（ZIP 爆弾の可能性）");
+      }
+      return true;
+    },
+  });
   const read = (name: string) => (zip[name] ? strFromU8(zip[name]) : "");
   const names = Object.keys(zip);
 
@@ -119,6 +145,12 @@ function extractOffice(buf: Buffer, ext: string): string {
 /** 長辺を抑えて JPEG に揃える（LLM に渡すトークン量と形式差を吸収） */
 async function toJpeg(buf: Uint8Array, maxSide = 1600): Promise<Uint8Array> {
   const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+  // ピクセル爆弾対策: デコード前にヘッダから画素数を確認する
+  const dim = probeImageSize(buf);
+  if (!dim) throw new ExtractLimitError("画像のサイズを読み取れないため内容は未検査");
+  if (dim.width * dim.height > config.maxImagePixels) {
+    throw new ExtractLimitError(`画素数が大きすぎるため内容は未検査（${dim.width}×${dim.height}）`);
+  }
   const img = await loadImage(Buffer.from(buf));
   const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
   const w = Math.round(img.width * scale);
@@ -155,9 +187,12 @@ async function extractPdf(buf: Buffer): Promise<Extracted> {
   const pages = Math.min(totalPages, config.maxOcrPages);
   const out: string[] = [];
   for (let i = 1; i <= pages; i++) {
+    // 描画サイズに上限を設ける（ページサイズを巨大に申告した PDF 対策）
+    const vp = (await doc.getPage(i)).getViewport({ scale: 1 });
+    const scale = Math.min(1.5, Math.sqrt(config.maxRenderPixels / Math.max(1, vp.width * vp.height)));
     const png = await renderPageAsImage(doc, i, {
       canvasImport: () => import("@napi-rs/canvas"),
-      scale: 1.5,
+      scale,
     });
     out.push(await ocrImage(await toJpeg(png)));
   }
@@ -171,6 +206,15 @@ async function extractPdf(buf: Buffer): Promise<Extracted> {
 // ---------------------------------------------------------------- 入口
 
 export async function extract(buf: Buffer, ext: string): Promise<Extracted> {
+  try {
+    return await extractInner(buf, ext);
+  } catch (e) {
+    if (e instanceof ExtractLimitError) return { text: "", method: "none", note: e.message };
+    throw e;
+  }
+}
+
+async function extractInner(buf: Buffer, ext: string): Promise<Extracted> {
   const kind = kindOf(ext);
   let r: Extracted;
   switch (kind) {

@@ -27,6 +27,14 @@ export const config = {
   maxTextChars: 200_000,
   /** OCR する PDF の最大ページ数 */
   maxOcrPages: 3,
+  /** Office の ZIP 展開で許す、展開後サイズ（ヘッダ申告値）の合計上限 */
+  maxUnzippedBytes: 50 * 1024 * 1024,
+  /** Office の ZIP で展開対象にする XML の最大数 */
+  maxZipEntries: 500,
+  /** デコードを許す画像の最大画素数（ピクセル爆弾対策） */
+  maxImagePixels: 50_000_000,
+  /** PDF を OCR 用に描画するときの最大画素数（LLM には 1600px に縮めて渡すので小さくてよい） */
+  maxRenderPixels: 4_000_000,
   /** この年数以上更新のないファイルを「古い」とみなす */
   staleYears: 3,
 
