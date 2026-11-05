@@ -6,13 +6,39 @@ export function probeImageSize(b: Uint8Array): { width: number; height: number }
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const has = (n: number) => b.length >= n;
 
-  // PNG: IHDR
+  // PNG: 先頭チャンクが IHDR であることも確認する
   if (has(24) && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+    if (dv.getUint32(12) !== 0x49484452) return null;
     return { width: dv.getUint32(16), height: dv.getUint32(20) };
   }
-  // GIF
-  if (has(10) && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
-    return { width: dv.getUint16(6, true), height: dv.getUint16(8, true) };
+  // GIF: 論理画面サイズより大きいフレームもあり得るので、各フレームの大きさも見て最大を採る
+  if (has(13) && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
+    let width = dv.getUint16(6, true);
+    let height = dv.getUint16(8, true);
+    let i = 13;
+    if (b[10] & 0x80) i += 3 * (1 << ((b[10] & 0x07) + 1)); // グローバルカラーテーブル
+    while (i < b.length) {
+      const block = b[i];
+      if (block === 0x3b) break; // 終端
+      if (block === 0x2c) {
+        // イメージディスクリプタ: 位置 + 大きさ
+        if (i + 10 > b.length) return null;
+        width = Math.max(width, dv.getUint16(i + 1, true) + dv.getUint16(i + 5, true));
+        height = Math.max(height, dv.getUint16(i + 3, true) + dv.getUint16(i + 7, true));
+        const flags = b[i + 9];
+        i += 10;
+        if (flags & 0x80) i += 3 * (1 << ((flags & 0x07) + 1)); // ローカルカラーテーブル
+        i += 1; // LZW 最小コードサイズ
+      } else if (block === 0x21) {
+        i += 2; // 拡張ブロック: 導入子 + ラベル
+      } else {
+        return null; // 想定外の構造は読めないものとして扱う（呼び出し側で処理しない）
+      }
+      // データサブブロックを読み飛ばす
+      while (i < b.length && b[i] !== 0) i += b[i] + 1;
+      i += 1;
+    }
+    return { width, height };
   }
   // BMP
   if (has(26) && b[0] === 0x42 && b[1] === 0x4d) {
@@ -48,6 +74,8 @@ export function probeImageSize(b: Uint8Array): { width: number; height: number }
       if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
         return { height: dv.getUint16(i + 5), width: dv.getUint16(i + 7) };
       }
+      // SOS 以降は画像データ。SOF が見つからないまま SOS に達したら読めないものとして扱う
+      if (marker === 0xda || marker === 0xd9) return null;
       if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
         i += 2;
         continue;

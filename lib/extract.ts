@@ -91,7 +91,16 @@ function extractOffice(buf: Buffer, ext: string): string {
   const zip = unzipSync(new Uint8Array(buf), {
     filter: (f) => {
       if (!wanted.test(f.name)) return false;
-      total += f.originalSize;
+      // 0=無圧縮, 8=deflate 以外は扱わない
+      if (f.compression !== 0 && f.compression !== 8) {
+        throw new ExtractLimitError("未対応の圧縮形式のため内容は未検査");
+      }
+      // 無圧縮エントリは originalSize ではなく size 分が出力される。両者が食い違うものは不正とみなす
+      if (f.compression === 0 && f.size !== f.originalSize) {
+        throw new ExtractLimitError("ZIP の構造が不正なため内容は未検査");
+      }
+      // 実際に確保される量の大きい方で数える（エントリを重ねて同じデータを何度も指させる手口にも効く）
+      total += Math.max(f.size, f.originalSize);
       count++;
       if (total > config.maxUnzippedBytes || count > config.maxZipEntries) {
         throw new ExtractLimitError("展開後のサイズが大きすぎるため内容は未検査（ZIP 爆弾の可能性）");
