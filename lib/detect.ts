@@ -275,17 +275,30 @@ export function findNameRanges(text: string, names: string[]): NameRange[] {
       return maskMatch(m);
     });
   }
-  return ranges.sort((a, b) => a[0] - b[0]);
+  // 後から見つけた氏名が、先に伏せた範囲と重なることがある（例: 「田佐」と「佐藤花子」）。
+  // 重なる範囲は1つにまとめる。まとめた範囲を伏せた結果は、順に伏せた結果と同じになる
+  const merged: NameRange[] = [];
+  for (const r of ranges.sort((a, b) => a[0] - b[0])) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] < last[1]) last[1] = Math.max(last[1], r[1]);
+    else merged.push([r[0], r[1]]);
+  }
+  return merged;
 }
 
 /** findNameRanges で得た範囲を伏せる */
 export function maskNameRanges(text: string, ranges: NameRange[]): string {
   let out = "";
   let pos = 0;
-  for (const [start, end] of ranges) {
-    if (start < pos || end > text.length) continue;
-    out += text.slice(pos, start) + maskMatch(text.slice(start, end));
-    pos = end;
+  for (const [start, end] of [...ranges].sort((a, b) => a[0] - b[0])) {
+    if (end > text.length) continue;
+    if (start < pos) {
+      // 前の範囲と重なる分は、まだ伏せていない残りをすべて伏せる（飛ばすと伏せ漏れになる）
+      if (end > pos) out += text.slice(pos, end).replace(/[^\s　]/g, "＊");
+    } else {
+      out += text.slice(pos, start) + maskMatch(text.slice(start, end));
+    }
+    pos = Math.max(pos, end);
   }
   return out + text.slice(pos);
 }
