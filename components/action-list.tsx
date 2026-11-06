@@ -297,10 +297,8 @@ function Row({ f, bucket, ...ctx }: Entry & Ctx) {
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           <IconBtn onClick={reveal} label={ctx.platform.revealLabel} icon="folder" />
           <IconBtn onClick={copyPath} label="パスをコピー" icon="copy" />
-          <Btn onClick={() => mark("done")} primary>
-            済
-          </Btn>
-          <Btn onClick={() => mark("skipped")}>対応しない</Btn>
+          <DoneBtn onClick={() => mark("done")} />
+          <SkipBtn onClick={() => mark("skipped")} />
         </div>
       </div>
       {open && (
@@ -386,10 +384,8 @@ function TableRow({ f, bucket, ...ctx }: Entry & Ctx) {
               <>
                 <IconBtn onClick={reveal} label={ctx.platform.revealLabel} icon="folder" />
                 <IconBtn onClick={copyPath} label="パスをコピー" icon="copy" />
-                <Btn onClick={() => mark("done")} primary small>
-                  済
-                </Btn>
-                <Btn onClick={() => mark("skipped")}>対応しない</Btn>
+                <DoneBtn onClick={() => mark("done")} small />
+                <SkipBtn onClick={() => mark("skipped")} small />
               </>
             ) : (
               <>
@@ -452,19 +448,54 @@ function IconBtn({ onClick, label, icon }: { onClick: () => void; label: string;
   );
 }
 
-function Btn({ children, onClick, primary, small }: { children: React.ReactNode; onClick: () => void; primary?: boolean; small?: boolean }) {
-  if (primary) {
-    // 「済」: Aqua 風の円形ジェルボタン（globals.css の .aqua）
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={`aqua aqua-green mx-0.5 flex shrink-0 items-center justify-center ${small ? "h-7 w-7 text-xs" : "h-9 w-9 text-sm"}`}
-      >
-        <span>{children}</span>
-      </button>
-    );
-  }
+/** Aqua 風の円形ジェルボタン（globals.css の .aqua） */
+function AquaBtn({
+  onClick,
+  label,
+  tone,
+  small,
+  children,
+}: {
+  onClick: () => void;
+  label: string;
+  tone: "green" | "graphite";
+  small?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={`aqua aqua-${tone} mx-0.5 flex shrink-0 items-center justify-center ${small ? "h-7 w-7 text-xs" : "h-9 w-9 text-sm"}`}
+    >
+      <span aria-hidden>{children}</span>
+    </button>
+  );
+}
+
+function DoneBtn({ onClick, small }: { onClick: () => void; small?: boolean }) {
+  return (
+    <AquaBtn onClick={onClick} label="対応済みにする" tone="green" small={small}>
+      済
+    </AquaBtn>
+  );
+}
+
+/** 「対応しない」= スキップ（状態の値も skipped）。▶| のアイコンで表す */
+function SkipBtn({ onClick, small }: { onClick: () => void; small?: boolean }) {
+  return (
+    <AquaBtn onClick={onClick} label="対応しない" tone="graphite" small={small}>
+      <svg viewBox="0 0 24 24" className={small ? "h-3.5 w-3.5" : "h-4 w-4"} fill="currentColor">
+        <path d="M6 5.5v13l9.5-6.5z" />
+        <rect x="16.5" y="5.5" width="2.5" height="13" rx="1" />
+      </svg>
+    </AquaBtn>
+  );
+}
+
+function Btn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
   return (
     <button
       type="button"

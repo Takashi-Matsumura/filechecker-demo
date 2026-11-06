@@ -181,4 +181,14 @@ body {
     --aqua-bottom: #115e59;
     --aqua-border: #134e4a;
   }
+  /* グラファイト: 「対応しない」など、主役ではない操作 */
+  .aqua-graphite {
+    --aqua-top: #cbd5e1;
+    --aqua-mid: #64748b;
+    --aqua-bottom: #475569;
+    --aqua-border: #334155;
+  }
+  .aqua svg {
+    filter: drop-shadow(0 -1px 0 rgb(0 0 0 / 0.35));
+  }
 }
