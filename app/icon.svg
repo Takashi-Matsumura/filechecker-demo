@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- ロゴ C「書類とルーペ」: ハイライトした1行をルーペで見つける -->
+  <rect width="48" height="48" rx="11" fill="#0f766e"/>
+  <rect x="10" y="8.5" width="21" height="28" rx="3" fill="#ffffff"/>
+  <path d="M14.5 15h12M14.5 25.5h7" stroke="#0f766e" stroke-width="2.4" stroke-linecap="round"/>
+  <rect x="13.2" y="18.2" width="14.6" height="4" rx="2" fill="#fbbf24"/>
+  <circle cx="30" cy="30" r="6.5" fill="#0f766e" stroke="#ffffff" stroke-width="3"/>
+  <path d="M34.8 34.8l4.2 4.2" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round"/>
+</svg>

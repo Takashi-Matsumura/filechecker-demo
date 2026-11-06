@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Logo } from "@/components/logo";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +15,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <header className="border-b border-stone-200 bg-white/80 backdrop-blur">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
             <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-              <span className="inline-block h-5 w-5 rounded bg-teal-700" aria-hidden />
+              <Logo />
               ファイル棚卸しアシスタント
             </Link>
             <span className="rounded-full bg-teal-50 px-3 py-1 text-xs text-teal-800 ring-1 ring-teal-200">
