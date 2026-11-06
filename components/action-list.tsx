@@ -295,8 +295,8 @@ function Row({ f, bucket, ...ctx }: Entry & Ctx) {
           <div className="truncate text-xs text-stone-400">{folderOf(f.rel_path)}</div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Btn onClick={reveal}>{ctx.platform.revealLabel}</Btn>
-          <Btn onClick={copyPath}>パスをコピー</Btn>
+          <IconBtn onClick={reveal} label={ctx.platform.revealLabel} icon="folder" />
+          <IconBtn onClick={copyPath} label="パスをコピー" icon="copy" />
           <Btn onClick={() => mark("done")} primary>
             済
           </Btn>
@@ -384,8 +384,8 @@ function TableRow({ f, bucket, ...ctx }: Entry & Ctx) {
           <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
             {!handled ? (
               <>
-                <Btn onClick={reveal}>{ctx.platform.revealLabel}</Btn>
-                <Btn onClick={copyPath}>パスをコピー</Btn>
+                <IconBtn onClick={reveal} label={ctx.platform.revealLabel} icon="folder" />
+                <IconBtn onClick={copyPath} label="パスをコピー" icon="copy" />
                 <Btn onClick={() => mark("done")} primary small>
                   済
                 </Btn>
@@ -422,6 +422,32 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       }`}
     >
       {children}
+    </button>
+  );
+}
+
+/** アイコンだけのボタン。名前は aria-label と、ホバー時のツールチップ（title）で伝える */
+function IconBtn({ onClick, label, icon }: { onClick: () => void; label: string; icon: "folder" | "copy" }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white text-stone-600 ring-1 ring-stone-200 hover:bg-stone-50 hover:text-stone-900"
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        {icon === "folder" ? (
+          // フォルダ（ファイルの場所を開く）
+          <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2h9A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" />
+        ) : (
+          // 重なった2枚の紙（コピー）
+          <>
+            <rect x="8.5" y="8.5" width="11" height="11" rx="1.5" />
+            <path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" />
+          </>
+        )}
+      </svg>
     </button>
   );
 }
