@@ -10,6 +10,8 @@ interface Scan {
   status: string;
   total: number;
   processed: number;
+  /** 1 = ファイル数の上限に達し、棚卸ししていないファイルが残っている */
+  truncated?: number;
   created_at: string;
 }
 
@@ -35,6 +37,11 @@ export function ScanHistory() {
               <Link href={`/scans/${s.id}`} className="flex items-center gap-4 px-4 py-3 text-sm hover:bg-stone-50">
                 <span className="w-32 shrink-0 text-xs text-stone-500">{formatDateTime(s.created_at)}</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-xs">{s.root}</span>
+                {!!s.truncated && (
+                  <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-300">
+                    上限で打ち切り
+                  </span>
+                )}
                 <span className="shrink-0 text-xs text-stone-500">
                   {STATUS[s.status] ?? s.status}
                   {s.total > 0 && ` · ${s.processed}/${s.total}`}

@@ -56,6 +56,10 @@ function open(): DatabaseSync {
   // 後から追加した列のマイグレーション
   const cols = db.prepare(`PRAGMA table_info(scans)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === "runner_pid")) db.exec(`ALTER TABLE scans ADD COLUMN runner_pid INTEGER`);
+  if (!cols.some((c) => c.name === "truncated")) {
+    // ファイル数の上限に達して、一覧づくりを途中で打ち切ったか（1 なら、棚卸ししていないファイルが残っている）
+    db.exec(`ALTER TABLE scans ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0`);
+  }
   if (!cols.some((c) => c.name === "walked")) {
     // ファイル一覧の作成が終わったか（再開時に一覧を作り直すかの判定に使う）
     db.exec(`ALTER TABLE scans ADD COLUMN walked INTEGER NOT NULL DEFAULT 0`);

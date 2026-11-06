@@ -28,6 +28,8 @@ export interface ScanData {
     total: number;
     processed: number;
     error: string | null;
+    /** 1 = ファイル数の上限に達し、棚卸ししていないファイルが残っている */
+    truncated?: number;
     created_at: string;
     finished_at: string | null;
   };
