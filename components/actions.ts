@@ -103,6 +103,10 @@ export function bucketOf(f: FileItem): Bucket {
     case "review":
       return "check";
     case "keep":
+      // 「そのままでよい」は、リスクが低いときだけ受け入れる。ルールでマイナンバーなどを見つけているのに
+      // AI が「保管」と答えた場合（AI の誤り、または本文に書かれた AI 向けの指示）に、やることから消えないようにする
+      if (f.risk === "high") return "move";
+      if (f.risk === "medium") return "check";
       return "ok";
   }
   // AI の判定が無い場合はルールの結果から決める

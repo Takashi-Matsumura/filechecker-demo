@@ -208,11 +208,17 @@ async function* walk(root: string, signal: AbortSignal, state: { count: number; 
   yield* rec(root);
 }
 
+/**
+ * ファイルの内容のハッシュ（重複の判定用）。一覧を作ってから開くまでの間に、範囲外へのリンクや
+ * FIFO（開くと書き手が来るまで戻らない）に差し替えられても読まないよう、リンクを辿らず・待たずに開き、
+ * 開いたものが通常のファイルかを確かめる。
+ */
 async function sha256(file: string): Promise<string> {
   const h = crypto.createHash("sha256");
-  const fh = await fs.open(file, "r");
+  const fh = await fs.open(/*turbopackIgnore: true*/ file, fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   try {
-    for await (const chunk of fh.createReadStream()) h.update(chunk);
+    if (!(await fh.stat()).isFile()) throw new PathChangedError("通常のファイルではありません");
+    for await (const chunk of fh.createReadStream({ autoClose: false })) h.update(chunk);
   } finally {
     await fh.close();
   }
@@ -692,6 +698,8 @@ async function safeFilePath(root: string, rel: string): Promise<string | null> {
 
 /** 最後の要素がシンボリックリンクなら開かない */
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+/** FIFO などを開いたときに待たない（通常のファイルには影響しない）。Windows には無い */
+const O_NONBLOCK = fsConstants.O_NONBLOCK ?? 0;
 
 export class PathChangedError extends Error {}
 
@@ -709,7 +717,7 @@ interface FileIdentity {
 export async function openValidated(root: string, rel: string) {
   const abs = await safeFilePath(root, rel);
   if (!abs) throw new PathChangedError("ファイルが見つからないか、スキャン対象の範囲外に変わったため処理しませんでした");
-  const fh = await fs.open(/*turbopackIgnore: true*/ abs, fsConstants.O_RDONLY | O_NOFOLLOW);
+  const fh = await fs.open(/*turbopackIgnore: true*/ abs, fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   try {
     const st = await fh.stat({ bigint: true });
     if (!st.isFile()) throw new PathChangedError("通常のファイルではないため処理しませんでした");
@@ -744,7 +752,15 @@ async function readValidatedFile(root: string, rel: string): Promise<Buffer | "t
       throw new PathChangedError("読み込み中にファイルの場所が変わったため処理しませんでした");
     }
     if (size > config.maxReadBytes) return "too_large";
-    return await fh.readFile();
+    // 開いたときの大きさまでしか読まない（判定のあとにファイルが大きくなっても、上限を超えて読み込まない）
+    const buf = Buffer.alloc(size);
+    let off = 0;
+    while (off < size) {
+      const { bytesRead } = await fh.read(buf, off, size - off, off);
+      if (bytesRead === 0) break;
+      off += bytesRead;
+    }
+    return buf.subarray(0, off);
   } finally {
     await fh.close();
   }

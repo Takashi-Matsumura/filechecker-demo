@@ -112,6 +112,33 @@ describe("番号の検出", () => {
   });
 });
 
+describe("処理時間（どんな中身でも線形時間で終わる）", () => {
+  // 以前のメールアドレスのルールは、@ のない英数字の連続で開始位置ごとに末尾まで読み直し、20万文字で約30秒かかっていた
+  const N = 200_000;
+  const cases: Record<string, string> = {
+    英字の連続: "a".repeat(N),
+    数字の連続: "1".repeat(N),
+    数字とハイフン: "0-".repeat(N / 2),
+    "@ の後の長い連続": "a@" + "a".repeat(N),
+    "@ の後のドットの連続": "a@" + "a.".repeat(N / 2) + "1",
+    base64風: "QUJD".repeat(N / 4),
+  };
+  for (const [name, text] of Object.entries(cases)) {
+    it(name, () => {
+      const t = performance.now();
+      detect(text);
+      findNameReadings(text);
+      findNamesByLayout(text);
+      const ms = performance.now() - t;
+      assert.ok(ms < 1000, `${Math.round(ms)}ms`);
+    });
+  }
+  it("メールアドレスは引き続き検出する（ローカル部は64文字まで）", () => {
+    assert.deepEqual(found("連絡先：taro.yamada+tag@mail.example.co.jp。").map((x) => x.text), ["taro.yamada+tag@mail.example.co.jp"]);
+    assert.deepEqual(typesOf(`${"x".repeat(65)}@example.com`), []);
+  });
+});
+
 describe("総合レベル", () => {
   it("連絡先が5件以上あると名簿とみなして「高」", () => {
     const text = Array.from({ length: 5 }, (_, i) => `user${i}@example.com`).join("\n");
