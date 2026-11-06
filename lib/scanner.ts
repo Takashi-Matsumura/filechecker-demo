@@ -709,7 +709,7 @@ interface FileIdentity {
 export async function openValidated(root: string, rel: string) {
   const abs = await safeFilePath(root, rel);
   if (!abs) throw new PathChangedError("ファイルが見つからないか、スキャン対象の範囲外に変わったため処理しませんでした");
-  const fh = await fs.open(abs, fsConstants.O_RDONLY | O_NOFOLLOW);
+  const fh = await fs.open(/*turbopackIgnore: true*/ abs, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
     const st = await fh.stat({ bigint: true });
     if (!st.isFile()) throw new PathChangedError("通常のファイルではないため処理しませんでした");
@@ -729,7 +729,7 @@ export async function stillSameFile(root: string, rel: string, abs: string, iden
   const again = await safeFilePath(root, rel);
   if (again !== abs) return false;
   try {
-    const st = await fs.stat(again, { bigint: true });
+    const st = await fs.stat(/*turbopackIgnore: true*/ again, { bigint: true });
     return st.dev === identity.dev && st.ino === identity.ino;
   } catch {
     return false;

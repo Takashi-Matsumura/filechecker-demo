@@ -278,6 +278,17 @@ npm run dev        # http://127.0.0.1:3000
 
 > 開発中に `lib/` のコード（棚卸しの処理・検出のルール・AI の指示文など）を変えたら、`npm run dev` を起動し直してください。ホットリロードだけでは、動いている棚卸しの処理に新しいコードが読み込まれないことがあります。DB の表や列を追加する変更も、起動し直したときに反映されます。
 
+## 変更したときの確認
+
+```sh
+npm run typecheck  # 型チェック
+npm run lint       # Lint
+npm test           # 単体テスト（ルール検出・伏せ方・やることの区分と優先度。AI は使わない）
+npm run build      # 本番ビルド
+```
+
+GitHub では、PR と main への push のたびに CI（`.github/workflows/ci.yml`）がこの 4 つを実行します。AI の精度は CI では測らないので、検出ルールや指示文を変えたときは、手元で `npm run eval` も実行してください。
+
 ## 設定（環境変数）
 
 | 変数 | 既定値 | 説明 |
@@ -310,6 +321,8 @@ lib/
 proxy.ts             localhost 以外からのアクセスを拒否
 scripts/testdata/    架空テストデータと評価の正解の生成スクリプト
 scripts/eval/        評価の実行スクリプト（npm run eval）
+tests/               単体テスト（npm test）
+.github/workflows/   CI（型チェック・Lint・単体テスト・本番ビルド）
 ```
 
 ## 安全上の前提と制限

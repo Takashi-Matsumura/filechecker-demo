@@ -9,6 +9,7 @@
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
+    "test": "node --test \"tests/**/*.test.ts\"",
     "testdata": "scripts/testdata/generate.sh",
     "eval": "node scripts/eval/run.mjs"
   },
@@ -30,5 +31,8 @@
     "eslint-config-next": "16.4.5",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
