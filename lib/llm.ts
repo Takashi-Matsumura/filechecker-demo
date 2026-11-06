@@ -267,3 +267,109 @@ ${input.text || "（本文なし）"}
     throw e;
   }
 }
+
+// ---------------------------------------------------------------- 氏名の補完
+
+/** 判定（judgeFile）が返す氏名・読み仮名の上限（JUDGE_SCHEMA の maxItems） */
+export const JUDGE_NAME_CAP = 20;
+/** 判定が見る本文の長さ（呼び出し側が本文をこの長さで切って渡す） */
+export const JUDGE_TEXT_CHARS = 6000;
+/** 氏名の補完で、1回に返せる氏名・読み仮名の上限 */
+const NAMES_CAP = 40;
+/** 氏名の補完で見る区切りの数の上限（時間がかかりすぎないように。6000字 × 10 = 6万字） */
+export const MAX_NAME_CHUNKS = 10;
+/** 区切りの境目で氏名が切れないよう、前の区切りと重ねる文字数 */
+const CHUNK_OVERLAP = 60;
+
+const NAMES_SCHEMA = {
+  type: "object",
+  properties: {
+    person_names: { type: "array", items: { type: "string", maxLength: 20 }, maxItems: NAMES_CAP },
+    name_readings: { type: "array", items: { type: "string", maxLength: 30 }, maxItems: NAMES_CAP },
+  },
+  required: ["person_names", "name_readings"],
+};
+
+const NAMES_SYSTEM = `あなたは文書から個人の氏名を書き出すアシスタントです。
+本文（一部マスク済み）に出てくる個人の氏名を、本文の表記どおりにすべて person_names に入れる（会社名・部署名・〔会社名〕のような空欄は入れない）。
+name_readings には、本文にカタカナ・ひらがな・ローマ字で実際に書かれている氏名の読み（「フリガナ」欄など）だけを書き写す。漢字の氏名から読みを推測して作ってはいけない。
+「見つけ済み」に挙げた氏名と読みは入れず、それ以外をすべて入れる。無ければ空配列。
+出力は改行やインデントを入れない1行の JSON にする。`;
+/** 氏名の補完の指示文の版（性能分析で、指示文の変更前後を比べるため） */
+export const NAMES_VERSION = promptVersion(NAMES_SYSTEM, JSON.stringify(NAMES_SCHEMA));
+
+async function extractNames(
+  text: string,
+  found: string[],
+  signal?: AbortSignal,
+  ctx?: CallContext,
+): Promise<{ person_names: string[]; name_readings: string[] }> {
+  const user = `見つけ済み: ${found.length ? found.join("、") : "なし"}
+
+本文:
+"""
+${text}
+"""`;
+  const r = await chat(NAMES_SYSTEM, user, {
+    // 氏名1件で十数トークン。上限いっぱいでも収まる長さにする
+    maxTokens: 1200,
+    jsonSchema: NAMES_SCHEMA,
+    signal,
+    track: { kind: "names", version: NAMES_VERSION, ctx, inputChars: text.length },
+  });
+  try {
+    const v = JSON.parse(r.content) as { person_names?: string[]; name_readings?: string[] };
+    return { person_names: v.person_names ?? [], name_readings: v.name_readings ?? [] };
+  } catch (e) {
+    markParseError(r.callId);
+    throw e;
+  }
+}
+
+/**
+ * 判定（judgeFile）で拾いきれない氏名・読み仮名を補う。
+ * 判定は本文の先頭 JUDGE_TEXT_CHARS 字しか見ず、氏名も JUDGE_NAME_CAP 件までしか返さないため、
+ * 判定が上限に達したとき・本文がそれより長いとき・判定に失敗したときに、本文を区切って氏名だけを聞き直す。
+ * 区切りごとに、見つけ済みの氏名を除いて聞き、上限に達したら同じ区切りを最大3回まで聞き直す。
+ * truncated: 本文が長く、先頭 MAX_NAME_CHUNKS 区切りまでしか見ていない
+ */
+export async function collectMoreNames(
+  maskedText: string,
+  judged: { names: string[]; readings: string[] } | null,
+  signal?: AbortSignal,
+  ctx?: CallContext,
+): Promise<{ names: string[]; readings: string[]; truncated: boolean }> {
+  const capped = !judged || judged.names.length >= JUDGE_NAME_CAP || judged.readings.length >= JUDGE_NAME_CAP;
+  const names: string[] = [];
+  const readings: string[] = [];
+  const key = (s: string) => s.replace(/[\s　]/g, "");
+  const seen = new Set([...(judged?.names ?? []), ...(judged?.readings ?? [])].map(key));
+  const add = (list: string[], into: string[]) => {
+    let added = 0;
+    for (const n of list) {
+      const k = key(n);
+      if (k.length < 2 || seen.has(k)) continue;
+      seen.add(k);
+      into.push(n.trim());
+      added++;
+    }
+    return added;
+  };
+
+  const chunks: string[] = [];
+  for (let start = 0; start < maskedText.length; start += JUDGE_TEXT_CHARS) {
+    chunks.push(maskedText.slice(Math.max(0, start - CHUNK_OVERLAP), start + JUDGE_TEXT_CHARS));
+  }
+  for (const [i, chunk] of chunks.slice(0, MAX_NAME_CHUNKS).entries()) {
+    // 先頭の区切りは判定が見ているので、判定が上限に達していなければ聞き直さない
+    if (i === 0 && !capped) continue;
+    for (let round = 0; round < 3; round++) {
+      signal?.throwIfAborted();
+      const r = await extractNames(chunk, [...(judged?.names ?? []), ...(judged?.readings ?? []), ...names, ...readings], signal, ctx);
+      const added = add(r.person_names, names) + add(r.name_readings, readings);
+      // 上限に達していなければ、この区切りは聞き終わり。新しく見つからなくなったときも打ち切る
+      if ((r.person_names.length < NAMES_CAP && r.name_readings.length < NAMES_CAP) || added === 0) break;
+    }
+  }
+  return { names, readings, truncated: chunks.length > MAX_NAME_CHUNKS };
+}

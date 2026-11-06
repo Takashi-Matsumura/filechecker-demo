@@ -6,7 +6,7 @@
 import crypto from "node:crypto";
 import { db } from "./db";
 
-export type CallKind = "ocr" | "judge";
+export type CallKind = "ocr" | "judge" | "names";
 export type ErrorKind = "timeout" | "http" | "network" | "parse" | "aborted";
 
 /** どの棚卸しのどのファイルの処理か（分かる範囲で） */
