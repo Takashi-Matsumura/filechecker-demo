@@ -101,6 +101,16 @@ describe("番号の検出", () => {
       assert.doesNotMatch(f[0].masked, /[0-9０-９]/, t);
     }
   });
+  it("見出しがなくても「生」「生まれ」が続く日付は生年月日として拾う", () => {
+    for (const t of ["昭和58年12月3日生", "1983年12月3日生まれ", "１９８３年１２月３日生、男性", "誕生日 2001/4/5"]) {
+      const f = found(t);
+      assert.deepEqual(f.map((x) => x.type), ["birthdate"], t);
+      assert.doesNotMatch(f[0].masked, /[0-9０-９]/, t);
+    }
+  });
+  it("生年月日でない日付は拾わない", () => {
+    for (const t of ["2025年4月15日生産分", "2025年4月15日生成", "受付日 2025年4月15日", "2025/4/15 生産"]) assert.deepEqual(typesOf(t), [], t);
+  });
   it("メールアドレス・住所・身分証・機密表示", () => {
     assert.deepEqual(typesOf("連絡先 taro.yamada@example.co.jp"), ["email"]);
     assert.deepEqual(typesOf("東京都千代田区架空町1-2-3"), ["address"]);
@@ -122,6 +132,11 @@ describe("処理時間（どんな中身でも線形時間で終わる）", () =
     "@ の後の長い連続": "a@" + "a".repeat(N),
     "@ の後のドットの連続": "a@" + "a.".repeat(N / 2) + "1",
     base64風: "QUJD".repeat(N / 4),
+    数字の後の長い空白: "1" + " ".repeat(N),
+    日付の形の繰り返し: "1/1/1 ".repeat(N / 6),
+    // 以前の生年月日のルール（\s*日?\s*）では、ここで約24秒かかっていた
+    "年月日の後の長い空白（生が続かない）": "1年1月1" + " ".repeat(N) + "x",
+    "日付の後の長い空白": "1/1/1" + " ".repeat(N),
   };
   for (const [name, text] of Object.entries(cases)) {
     it(name, () => {
