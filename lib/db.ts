@@ -95,7 +95,23 @@ function open(): DatabaseSync {
       created_at           TEXT NOT NULL
     );
   `);
-  // 後から追加した列のマイグレーション
+  // 担当者の判断（「済」「対応しない」「戻す」）の記録。AI の推奨との比較に使う（本文・ファイル名は残さない）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_feedback (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      scan_id              INTEGER NOT NULL,
+      file_id              INTEGER NOT NULL,
+      bucket               TEXT NOT NULL,     -- move | remove | tidy | check（押したときの区分）
+      final_recommendation TEXT,
+      risk                 TEXT,
+      unread               INTEGER NOT NULL DEFAULT 0,  -- 中身を確認できなかったファイル
+      status               TEXT NOT NULL,     -- todo | done | skipped
+      prompt_version       TEXT,
+      created_at           TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_feedback_file ON ai_feedback(scan_id, file_id);
+  `);
+    // 後から追加した列のマイグレーション
   const cols = db.prepare(`PRAGMA table_info(scans)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === "runner_pid")) db.exec(`ALTER TABLE scans ADD COLUMN runner_pid INTEGER`);
   if (!cols.some((c) => c.name === "truncated")) {

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AiStats, CallSummary } from "@/lib/metrics";
+import type { AiStats, CallSummary, FeedbackSummary } from "@/lib/metrics";
+import { BUCKET_ORDER, BUCKETS } from "./actions";
 import { BackLink } from "./back-link";
 import { RECOMMENDATION, RISK, type Level } from "./labels";
 
@@ -71,7 +72,7 @@ export function AiAnalysis() {
 
       {!stats ? (
         <p className="text-sm text-stone-400">読み込み中…</p>
-      ) : stats.byKind.length === 0 && stats.files.total === 0 ? (
+      ) : stats.byKind.length === 0 && stats.files.total === 0 && stats.feedback.total.done + stats.feedback.total.skipped === 0 ? (
         <p className="rounded-xl border border-stone-200 bg-white p-5 text-sm text-stone-500">
           まだ記録がありません。棚卸しをすると、AI の処理の記録がたまっていきます。
         </p>
@@ -80,6 +81,7 @@ export function AiAnalysis() {
           <Speed stats={stats} />
           <Versions rows={stats.byVersion} />
           <Judgements stats={stats} />
+          <Feedback stats={stats} />
           <ByExt stats={stats} />
         </>
       )}
@@ -253,6 +255,112 @@ function Judgements({ stats }: { stats: AiStats }) {
         </ul>
       </Card>
     </div>
+  );
+}
+
+/** 「対応しない」の割合（担当者が AI の指摘を受け入れなかった割合）を、数字と帯で見せる */
+function SkipRate({ v }: { v: FeedbackSummary | undefined }) {
+  const total = (v?.done ?? 0) + (v?.skipped ?? 0);
+  const rate = total ? (v!.skipped / total) * 100 : 0;
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <span className="h-2 w-24 rounded-full bg-stone-100" aria-hidden>
+        <span className={`block h-full rounded-full ${rate >= 30 ? "bg-red-500" : "bg-stone-400"}`} style={{ width: `${rate}%` }} />
+      </span>
+      <span className={`w-10 text-right tabular-nums ${rate >= 30 ? "text-red-700" : ""}`}>{total ? `${Math.round(rate)}%` : "—"}</span>
+    </div>
+  );
+}
+
+/** 担当者の判断（「済」「対応しない」）との比較 */
+function Feedback({ stats }: { stats: AiStats }) {
+  const fb = stats.feedback;
+  const total = fb.total.done + fb.total.skipped;
+  return (
+    <Card
+      title="担当者の判断との比較"
+      note="やることリストで担当者が押した「済」「対応しない」を、区分ごとに集計しています（ファイルごとに最後の操作。「戻す」で未対応に戻したものは数えません）。「対応しない」が多い区分は、指摘が見当違いになっている可能性があります。"
+    >
+      {total === 0 ? (
+        <p className="text-sm text-stone-400">まだ担当者の判断の記録がありません。やることリストで「済」「対応しない」を押すと、ここに集計されます。</p>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[360px] text-sm">
+              <thead className="border-b border-stone-200 text-left text-xs text-stone-500">
+                <tr>
+                  <th className="py-2 pr-3 font-medium">区分</th>
+                  <th className="py-2 pr-3 text-right font-medium">済</th>
+                  <th className="py-2 pr-3 text-right font-medium">対応しない</th>
+                  <th className="py-2 text-right font-medium">「対応しない」の割合</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {BUCKET_ORDER.map((b) => {
+                  const v = fb.byBucket[b];
+                  return (
+                    <tr key={b}>
+                      <td className={`py-2 pr-3 font-medium ${BUCKETS[b].text}`}>{BUCKETS[b].verb}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{num(v?.done ?? 0)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{num(v?.skipped ?? 0)}</td>
+                      <td className="py-2">
+                        <SkipRate v={v} />
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr className="border-t-2 border-stone-200 font-semibold">
+                  <td className="py-2 pr-3">合計</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">{num(fb.total.done)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">{num(fb.total.skipped)}</td>
+                  <td className="py-2">
+                    <SkipRate v={fb.total} />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            {fb.unread.done + fb.unread.skipped > 0 && (
+              <p className="mt-2 text-xs text-stone-500">
+                うち中身を確認できなかったファイル（AI は中身を見ていない）：済 {num(fb.unread.done)}・対応しない {num(fb.unread.skipped)}
+              </p>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[320px] text-sm">
+              <thead className="border-b border-stone-200 text-left text-xs text-stone-500">
+                <tr>
+                  <th className="py-2 pr-3 font-medium">判定の指示文の版</th>
+                  <th className="py-2 pr-3 text-right font-medium">済</th>
+                  <th className="py-2 pr-3 text-right font-medium">対応しない</th>
+                  <th className="py-2 text-right font-medium">「対応しない」の割合</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {fb.byVersion.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-3 text-center text-xs text-stone-400">
+                      AI が判定したファイルの記録がありません
+                    </td>
+                  </tr>
+                ) : (
+                  fb.byVersion.map((v) => (
+                    <tr key={v.promptVersion}>
+                      <td className="py-2 pr-3 font-mono text-xs">{v.promptVersion}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{num(v.done)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{num(v.skipped)}</td>
+                      <td className="py-2">
+                        <SkipRate v={v} />
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+            <p className="mt-2 text-xs text-stone-500">指示文を変えたときに、担当者に受け入れられる指摘が増えたかを比べられます。</p>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 
