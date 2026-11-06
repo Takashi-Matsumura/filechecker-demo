@@ -125,7 +125,12 @@ interface Rule {
   /** 一致を採用するか（チェックデジットなど） */
   accept?: (m: RegExpExecArray, text: string) => boolean;
   mask: (s: string) => string;
+  /** 一致した文字列からレベルを決める（指定がなければ level のまま） */
+  levelOf?: (matches: string[]) => Level;
 }
+
+/** 文書そのものに付ける機密の表示。これがあれば、その文書は機密として扱われている */
+const CONFIDENTIAL_MARK = /社外秘|部外秘|関係者外秘|極秘|取扱注意|confidential/i;
 
 /** 番号の数字（半角・全角）と区切り（空白・ハイフン類・長音記号。全角を含む） */
 const ND = "[0-9０-９]";
@@ -209,6 +214,9 @@ const RULES: Rule[] = [
     level: "medium",
     re: /社外秘|部外秘|関係者外秘|極秘|機密情報|秘密保持|取扱注意|confidential/gi,
     mask: (s) => s,
+    // 「秘密保持」「機密情報」は、契約書のひな形や規程などで話題として出てくることが多く、
+    // それだけでは文書が機密とは限らない。「社外秘」などの表示がなければ「低」にする
+    levelOf: (matches) => (matches.some((m) => CONFIDENTIAL_MARK.test(m)) ? "medium" : "low"),
   },
 ];
 
@@ -235,6 +243,7 @@ export function detect(text: string): DetectResult {
   for (const rule of RULES) {
     rule.re.lastIndex = 0;
     let count = 0;
+    const matched: string[] = [];
     let m: RegExpExecArray | null;
     while ((m = rule.re.exec(text))) {
       const start = m.index;
@@ -243,10 +252,12 @@ export function detect(text: string): DetectResult {
       if (overlaps(start, end)) continue;
       if (rule.accept && !rule.accept(m, text)) continue;
       count++;
+      matched.push(m[0]);
       spans.push({ type: rule.type, start, end, masked: rule.mask(m[0]) });
     }
     if (count > 0) {
-      findings.push({ type: rule.type, label: FINDING_LABELS[rule.type], level: rule.level, count, samples: [] });
+      const level = rule.levelOf ? rule.levelOf(matched) : rule.level;
+      findings.push({ type: rule.type, label: FINDING_LABELS[rule.type], level, count, samples: [] });
     }
   }
 

@@ -139,6 +139,20 @@ describe("処理時間（どんな中身でも線形時間で終わる）", () =
   });
 });
 
+describe("機密表示のレベル", () => {
+  const level = (text: string) => detect(text).findings.find((f) => f.type === "confidential")?.level;
+  it("「社外秘」「取扱注意」などの表示があれば「中」", () => {
+    assert.equal(level("本書は社外秘です"), "medium");
+    assert.equal(level("※取扱注意"), "medium");
+    assert.equal(level("CONFIDENTIAL"), "medium");
+    assert.equal(level("第3条（秘密保持）… 本書は部外秘とする"), "medium");
+  });
+  it("「秘密保持」「機密情報」だけ（契約書のひな形など）は「低」", () => {
+    assert.equal(level("秘密保持契約書（ひな形）"), "low");
+    assert.equal(level("受領者は機密情報を第三者に開示しない"), "low");
+  });
+});
+
 describe("総合レベル", () => {
   it("連絡先が5件以上あると名簿とみなして「高」", () => {
     const text = Array.from({ length: 5 }, (_, i) => `user${i}@example.com`).join("\n");

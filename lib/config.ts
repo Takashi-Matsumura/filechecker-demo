@@ -29,6 +29,10 @@ export const config = {
   maxReadBytes: Number(process.env.SCAN_MAX_READ_BYTES ?? 30 * 1024 * 1024),
   /** 検出対象にするテキストの最大文字数 */
   maxTextChars: 200_000,
+  /** 文字を読む PDF の最大ページ数（数万ページの PDF で長引かないように） */
+  maxPdfTextPages: 500,
+  /** PDF の文字を読む時間の上限(ms)。超えたら、そこまでに読んだページで検査する */
+  pdfTextTimeoutMs: 60_000,
   /** OCR する PDF の最大ページ数 */
   maxOcrPages: 3,
   /** Office の ZIP 展開で許す、展開後サイズ（ヘッダ申告値）の合計上限 */
