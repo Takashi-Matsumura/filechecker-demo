@@ -198,6 +198,8 @@ export interface AiStats {
 const RANK: Record<string, number> = { none: 0, low: 1, medium: 2, high: 3 };
 
 type CallRow = {
+  scan_id: number | null;
+  file_id: number | null;
   kind: CallKind;
   model: string | null;
   prompt_version: string;
@@ -242,15 +244,57 @@ function groupBy<T>(list: T[], key: (x: T) => string): Map<string, T[]> {
   return m;
 }
 
-/** AI の性能の集計。since（ISO 日時）以降の記録だけを対象にする（null ならすべて） */
-export function aiStats(since: string | null): AiStats {
+/** 判定の指示文の版の一覧（新しい順）。絞り込みの選択肢に使う */
+export interface JudgeVersion {
+  version: string;
+  calls: number;
+  firstAt: string;
+  lastAt: string;
+}
+
+export function judgeVersions(): JudgeVersion[] {
+  try {
+    return db()
+      .prepare(
+        `SELECT prompt_version AS version, count(*) AS calls, min(started_at) AS firstAt, max(started_at) AS lastAt
+           FROM ai_calls WHERE kind='judge' GROUP BY prompt_version ORDER BY max(started_at) DESC`,
+      )
+      .all() as unknown as JudgeVersion[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * AI の性能の集計。
+ * since（ISO 日時）以降の記録だけを対象にする（null ならすべて）。
+ * version を指定すると、その「判定の指示文の版」で処理した記録だけに絞る。
+ * 判定以外（文字の読み取り・氏名の補完）は別の指示文なので、その版の判定と同じファイルの処理だったかで絞る
+ * （棚卸しの分は棚卸しとファイルの番号で、評価の分はその版で行った評価の実行時間内かで結びつける）。
+ */
+export function aiStats(since: string | null, version: string | null = null): AiStats {
   const d = db();
-  const calls = d
+  let calls = d
     .prepare(
-      `SELECT kind, model, prompt_version, ext, started_at, duration_ms, completion_tokens, ok, error_kind
+      `SELECT scan_id, file_id, kind, model, prompt_version, ext, started_at, duration_ms, completion_tokens, ok, error_kind
          FROM ai_calls WHERE started_at >= ? ORDER BY started_at`,
     )
     .all(since ?? "") as CallRow[];
+  if (version) {
+    const files = new Set(
+      (d.prepare(`SELECT scan_id, file_id FROM ai_file_stats WHERE prompt_version=?`).all(version) as { scan_id: number; file_id: number }[]).map(
+        (r) => `${r.scan_id}:${r.file_id}`,
+      ),
+    );
+    const windows = listEvals(1000)
+      .filter((e) => e.judgeVersion === version)
+      .map((e) => ({ end: e.createdAt, start: new Date(new Date(e.createdAt).getTime() - e.durationMs - 1000).toISOString() }));
+    calls = calls.filter((c) => {
+      if (c.kind === "judge") return c.prompt_version === version;
+      if (c.scan_id !== null) return files.has(`${c.scan_id}:${c.file_id}`);
+      return windows.some((w) => c.started_at >= w.start && c.started_at <= w.end);
+    });
+  }
 
   const byKind = [...groupBy(calls, (r) => r.kind)].map(([kind, rows]) => ({
     kind: kind as CallKind,
@@ -269,9 +313,9 @@ export function aiStats(since: string | null): AiStats {
     .prepare(
       `SELECT rule_level, ai_ok, ai_risk, final_recommendation, names_ai, names_layout, names_both,
               readings_ai, readings_layout, readings_both
-         FROM ai_file_stats WHERE created_at >= ?`,
+         FROM ai_file_stats WHERE created_at >= ? AND (? IS NULL OR prompt_version = ?)`,
     )
-    .all(since ?? "") as {
+    .all(since ?? "", version, version) as {
     rule_level: string;
     ai_ok: number;
     ai_risk: string | null;
@@ -315,9 +359,9 @@ export function aiStats(since: string | null): AiStats {
       `SELECT f.bucket, f.final_recommendation, f.unread, f.status, f.prompt_version
          FROM ai_feedback f
         WHERE f.id = (SELECT max(id) FROM ai_feedback g WHERE g.scan_id = f.scan_id AND g.file_id = f.file_id)
-          AND f.status <> 'todo' AND f.created_at >= ?`,
+          AND f.status <> 'todo' AND f.created_at >= ? AND (? IS NULL OR f.prompt_version = ?)`,
     )
-    .all(since ?? "") as { bucket: string; final_recommendation: string | null; unread: number; status: string; prompt_version: string | null }[];
+    .all(since ?? "", version, version) as { bucket: string; final_recommendation: string | null; unread: number; status: string; prompt_version: string | null }[];
   const empty = (): FeedbackSummary => ({ done: 0, skipped: 0 });
   const add = (m: FeedbackSummary, status: string) => (status === "done" ? m.done++ : m.skipped++);
   const feedback: AiStats["feedback"] = { total: empty(), byBucket: {}, byRecommendation: {}, byVersion: [], unread: empty() };
@@ -337,7 +381,7 @@ export function aiStats(since: string | null): AiStats {
 
   return {
     since,
-    evals: listEvals(),
+    evals: version ? listEvals(1000).filter((e) => e.judgeVersion === version).slice(0, 20) : listEvals(),
     feedback,
     byKind,
     byVersion,
