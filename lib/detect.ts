@@ -232,12 +232,69 @@ function nameVariants(names: string[]): string[] {
     out.add(full);
     if (parts.length > 1) {
       for (const p of parts) if (p.length >= 2) out.add(p);
-    } else if (full.length >= 4) {
-      out.add(full.slice(0, 2)); // 推定の姓（AI が要約などで姓だけ書くことがあるため）
+    } else if (full.length >= 4 && !KANA_ONLY.test(full)) {
+      // 推定の姓（AI が要約などで姓だけ書くことがあるため）。
+      // カナだけの読み仮名は先頭2文字が他の語と重なりやすい（「ヤマ」→「ヤマト」）ので対象外
+      out.add(full.slice(0, 2));
     }
   }
   // 長いものから置換しないと部分一致が先に潰れる
   return [...out].sort((a, b) => b.length - a.length);
+}
+
+const KANA_ONLY = /^[ぁ-ゖァ-ヶｦ-ﾟー・･]+$/;
+
+// ---------------------------------------------------------------- 氏名の読み仮名
+
+const KANA_WORD = "(?:[ァ-ヶｦ-ﾟー・･]+|[ぁ-ゖー]+)";
+const READING_LABEL = "(?:フリガナ|ふりがな|ﾌﾘｶﾞﾅ|よみがな|ヨミガナ|読み仮名|カナ氏名|氏名カナ|氏名[（(]カナ[）)]|カナ)";
+/** 「フリガナ ヤマダ タロウ」「ふりがな：やまだ たろう」のような、見出しの直後の読み仮名 */
+// 見出しの前がカナでなく（「カナダ」を拾わない）、見出しと読み仮名の間に空白かコロンがあること
+const READING_INLINE = new RegExp(
+  `(?<![ぁ-ゖァ-ヶｦ-ﾟー])${READING_LABEL}(?:[ 　]*[:：][ 　]*|[ 　]+)(${KANA_WORD}(?:[ 　]${KANA_WORD})?)`,
+  "g",
+);
+const READING_HEADER = new RegExp(`^${READING_LABEL}$`);
+const KANA_CELL = new RegExp(`^${KANA_WORD}(?:[ 　]${KANA_WORD})?$`);
+/**
+ * 拾う読み仮名の上限。伏せる処理は1件ごとに本文全体を調べるので、
+ * 巨大な名簿で処理が止まらないように抑える（AI が返す氏名も20件まで）。
+ */
+const MAX_READINGS = 100;
+
+/**
+ * 本文から氏名の読み仮名を拾う（AI の拾い漏れに備えたルール）。
+ * - 見出しの直後に書かれたカナ（申込書・提出書の OCR など）
+ * - 表の「フリガナ」列のカナ（Excel・CSV の名簿。タブ区切り / カンマ区切り）
+ */
+export function findNameReadings(text: string): string[] {
+  const out = new Set<string>();
+  const add = (v: string) => {
+    if (out.size < MAX_READINGS && v.replace(/[\s　]/g, "").length >= 2) out.add(v);
+  };
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (out.size >= MAX_READINGS) break;
+    // 表の行（タブ・カンマ区切り）は列で判断するので、ここでは扱わない
+    if (/[\t,]/.test(line)) continue;
+    for (const m of line.matchAll(READING_INLINE)) add(m[1].trim());
+  }
+  // 表は見出し行から下を1回だけ読む（読んだ行は飛ばして、同じ行を何度も読み直さない）
+  for (let i = 0; i < lines.length && out.size < MAX_READINGS; i++) {
+    for (const sep of ["\t", ","]) {
+      const header = lines[i].split(sep).map((c) => c.trim().replace(/^"|"$/g, ""));
+      if (header.length < 2) continue;
+      const col = header.findIndex((c) => READING_HEADER.test(c));
+      if (col < 0) continue;
+      let j = i + 1;
+      for (; j < lines.length && lines[j].trim() && out.size < MAX_READINGS; j++) {
+        add((lines[j].split(sep)[col] ?? "").trim().replace(/^"|"$/g, "").match(KANA_CELL)?.[0] ?? "");
+      }
+      i = j - 1;
+      break;
+    }
+  }
+  return [...out];
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
