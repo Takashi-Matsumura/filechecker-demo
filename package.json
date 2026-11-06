@@ -9,7 +9,8 @@
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
-    "testdata": "scripts/testdata/generate.sh"
+    "testdata": "scripts/testdata/generate.sh",
+    "eval": "node scripts/eval/run.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.1.0",

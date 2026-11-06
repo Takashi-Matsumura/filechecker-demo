@@ -111,6 +111,19 @@ function open(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS idx_ai_feedback_file ON ai_feedback(scan_id, file_id);
   `);
+    // テストデータの正解を使った評価（npm run eval）の結果。数字だけを記録する
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_evals (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at     TEXT NOT NULL,
+      model          TEXT,
+      judge_version  TEXT NOT NULL,
+      ocr_version    TEXT NOT NULL,
+      files          INTEGER NOT NULL,
+      duration_ms    INTEGER NOT NULL,
+      metrics_json   TEXT NOT NULL      -- 集計（EvalMetrics）
+    );
+  `);
     // 後から追加した列のマイグレーション
   const cols = db.prepare(`PRAGMA table_info(scans)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === "runner_pid")) db.exec(`ALTER TABLE scans ADD COLUMN runner_pid INTEGER`);
