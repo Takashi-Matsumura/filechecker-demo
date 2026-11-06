@@ -305,7 +305,7 @@ async function copyFromRepresentative(id: number, repId: number, signal: AbortSi
   ai.reason = `同じ内容のファイルが「${rep.rel_path as string}」にあります（重複）`;
   d.prepare(
     `UPDATE files SET status='done', error=?, extract_method=?, text_chars=?, excerpt=?, findings_json=?,
-       rule_level=?, ai_json=?, risk=?, name_ranges=? WHERE id=?`,
+       rule_level=?, ai_json=?, risk=?, name_ranges=?, ocr_preview=? WHERE id=?`,
   ).run(
     "内容が同一のため、原本の解析結果を流用",
     rep.extract_method as string | null,
@@ -317,6 +317,7 @@ async function copyFromRepresentative(id: number, repId: number, signal: AbortSi
     rep.risk as string,
     // 内容が同一なので、氏名の位置もそのまま使える
     (rep.name_ranges as string | null) ?? null,
+    (rep.ocr_preview as string | null) ?? null,
     id,
   );
   return true;
@@ -399,6 +400,9 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
 
   // 保存するのはマスク済みの抜粋のみ。AI の判定からも氏名リストは落とし、要約文中の氏名も伏せる
   const excerpt = final.text.slice(0, 1500);
+  // OCR したものは、プレビューのたびに OCR し直すと遅いので、伏せた全文と検出位置をここで残す
+  const ocrPreview: OcrPreview | null =
+    method === "ocr" ? { text: final.text, marks: buildMarks(final.placed, allFindings, nameRanges) } : null;
   const aiStored: Partial<AiJudgement> = ai
     ? { ...ai, summary: maskNames(ai.summary, names), reason: maskNames(ai.reason, names), person_names: undefined }
     : { recommendation: FALLBACK_REC[risk], reason: "AI 判定が使えなかったため、ルール検出の結果から推定", summary: "", category: "その他", risk };
@@ -411,7 +415,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
 
   d.prepare(
     `UPDATE files SET status='done', error=?, extract_method=?, text_chars=?, excerpt=?, findings_json=?,
-       rule_level=?, ai_json=?, risk=?, name_ranges=? WHERE id=?`,
+       rule_level=?, ai_json=?, risk=?, name_ranges=?, ocr_preview=? WHERE id=?`,
   ).run(
     notes.length ? notes.join(" / ") : null,
     method,
@@ -422,6 +426,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
     JSON.stringify(aiStored),
     risk,
     JSON.stringify(nameRanges),
+    ocrPreview ? JSON.stringify(ocrPreview) : null,
     id,
   );
 }
@@ -642,6 +647,8 @@ export type Preview =
       /** スキャン後に内容が変わっている */
       changed: boolean;
       note: string | null;
+      /** live: いまファイルを読み直して作った / ocr: 棚卸しのときに画像から読み取って保存した文字 */
+      source: "live" | "ocr";
     }
   | { available: false; reason: string };
 
@@ -654,15 +661,21 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
   const row = db()
     .prepare(
       `SELECT s.root AS root, f.rel_path AS rel, f.ext AS ext, f.sha256 AS sha256, f.status AS status, f.extract_method AS method,
-              f.findings_json AS findings, f.name_ranges AS nameRanges
+              f.findings_json AS findings, f.name_ranges AS nameRanges, f.ocr_preview AS ocrPreview
          FROM files f JOIN scans s ON s.id = f.scan_id WHERE f.id=? AND f.scan_id=?`,
     )
     .get(fileId, scanId) as
-    | { root: string; rel: string; ext: string; sha256: string | null; status: string; method: string | null; findings: string; nameRanges: string | null }
+    | { root: string; rel: string; ext: string; sha256: string | null; status: string; method: string | null; findings: string; nameRanges: string | null; ocrPreview: string | null }
     | undefined;
   if (!row) return null;
   if (row.status !== "done") return { available: false, reason: "まだ解析が終わっていません" };
-  if (row.method === "ocr") return { available: false, reason: "画像から文字を読み取ったファイルのため、プレビューの代わりに保存済みの抜粋を表示しています" };
+  if (row.method === "ocr") {
+    const saved = parseOcrPreview(row.ocrPreview);
+    if (!saved) {
+      return { available: false, reason: "画像から読み取った文字を保存していない以前の棚卸しのため、保存済みの抜粋を表示しています。もう一度棚卸しするとプレビューできます" };
+    }
+    return { available: true, ...saved, changed: false, note: null, source: "ocr" };
+  }
   if (row.method === "none" || !row.method) return { available: false, reason: "このファイルの形式は内容を読み取れません" };
 
   // 氏名が見つかったファイルは、スキャン時に残した位置で伏せ直す。伏せられる保証がなければ表示しない
@@ -688,30 +701,63 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
   if (r.method === "none") return { available: false, reason: r.note ?? "内容を読み取れませんでした" };
 
   const { findings, spans } = detect(r.text);
-  const meta = new Map(findings.map((f) => [f.type, f]));
   const red = redact(r.text, spans);
   const nameRanges = ranges ?? [];
   if (nameRanges.some(([, end]) => end > red.text.length)) {
     return { available: false, reason: "氏名の位置が本文と合わないため、保存済みの抜粋を表示しています" };
   }
-  const marks: PreviewMark[] = red.placed.map((p) => ({
-    ...p,
-    label: meta.get(p.type)?.label ?? FINDING_LABELS[p.type],
-    level: meta.get(p.type)?.level ?? "low",
-  }));
-  // 氏名もハイライトする（番号などの検出箇所と重なるものは除く）
-  for (const [start, end] of nameRanges) {
-    if (marks.some((m) => start < m.end && end > m.start)) continue;
-    marks.push({ type: "person_name", label: person?.label ?? FINDING_LABELS.person_name, level: person?.level ?? "low", start, end });
-  }
-  marks.sort((a, b) => a.start - b.start);
+  const allFindings: Finding[] = person ? [...findings, person] : findings;
+  const marks = buildMarks(red.placed, allFindings, nameRanges);
   return {
     available: true,
     text: maskNameRanges(red.text, nameRanges),
     marks,
     changed,
     note: r.note ?? null,
+    source: "live",
   };
+}
+
+type OcrPreview = { text: string; marks: PreviewMark[] };
+
+/**
+ * ハイライトする箇所を組み立てる。番号などの検出箇所に、氏名の位置を加える
+ * （番号などと重なる氏名は除く）。位置はどれも伏せたあとの本文上の座標。
+ */
+function buildMarks(
+  placed: { type: FindingType; start: number; end: number }[],
+  findings: Pick<Finding, "type" | "label" | "level">[],
+  nameRanges: NameRange[],
+): PreviewMark[] {
+  const meta = new Map(findings.map((f) => [f.type, f]));
+  const marks: PreviewMark[] = placed.map((p) => ({
+    ...p,
+    label: meta.get(p.type)?.label ?? FINDING_LABELS[p.type],
+    level: meta.get(p.type)?.level ?? "low",
+  }));
+  const person = meta.get("person_name");
+  for (const [start, end] of nameRanges) {
+    if (marks.some((m) => start < m.end && end > m.start)) continue;
+    marks.push({ type: "person_name", label: person?.label ?? FINDING_LABELS.person_name, level: person?.level ?? "low", start, end });
+  }
+  return marks.sort((a, b) => a.start - b.start);
+}
+
+/** 保存した OCR のプレビューを読む。形が正しくなければ null（抜粋の表示に切り替える） */
+function parseOcrPreview(json: string | null): OcrPreview | null {
+  if (!json) return null;
+  try {
+    const v = JSON.parse(json) as Partial<OcrPreview>;
+    if (typeof v.text !== "string" || !Array.isArray(v.marks)) return null;
+    const len = v.text.length;
+    const sorted = v.marks.every(
+      (m, i, all) =>
+        Number.isInteger(m.start) && Number.isInteger(m.end) && m.start >= 0 && m.end > m.start && m.end <= len && (i === 0 || m.start >= all[i - 1].end),
+    );
+    return sorted ? { text: v.text, marks: v.marks } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 保存した氏名の位置を読む。形が正しくなければ null（伏せられないものとして扱う） */
