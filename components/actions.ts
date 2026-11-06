@@ -99,16 +99,20 @@ export function bucketOf(f: FileItem): Bucket {
 
 const LEVEL_RANK: Record<Level, number> = { high: 3, medium: 2, low: 1, none: 0 };
 
-/** 理由タグは1つだけ。いちばん効く理由を選ぶ */
-export function reasonTag(f: FileItem): string {
-  if (f.dup_of !== null) return "重複";
+/**
+ * 理由タグ。先頭がいちばん効く理由（区分の理由）で、残りは補足。
+ * 区分は1つに決まるため、隠れてしまう理由（重複・古い・個人情報）を補足として見せる。
+ */
+export function reasonTags(f: FileItem): string[] {
+  const tags: string[] = [];
+  if (f.dup_of !== null) tags.push("重複");
   const top = [...f.findings]
     .filter((x) => x.type !== "person_name")
     .sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level] || b.count - a.count)[0];
-  if (top) return `${top.label} ${top.count}件`;
-  if (f.findings.some((x) => x.type === "person_name")) return "氏名あり";
-  if (f.is_stale) return `${new Date(f.mtime).getFullYear()}年から更新なし`;
-  return f.ai?.category ?? "要確認";
+  if (top) tags.push(`${top.label} ${top.count}件`);
+  else if (f.findings.some((x) => x.type === "person_name")) tags.push("氏名あり");
+  if (f.is_stale) tags.push(`${new Date(f.mtime).getFullYear()}年から更新なし`);
+  return tags.length > 0 ? tags : [f.ai?.category ?? "要確認"];
 }
 
 /** 漏れたときの影響が特に大きい情報。件数より種類を優先して並べる */
