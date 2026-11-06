@@ -1,0 +1,200 @@
+{
+  "かすれた申込書_スキャン.jpg": {
+    "types": [
+      "phone",
+      "email",
+      "address"
+    ],
+    "names": [
+      "森本 健司"
+    ],
+    "readings": [
+      "モリモト ケンジ"
+    ],
+    "risk": [
+      "medium",
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ],
+    "ocr": [
+      "森本 健司",
+      "モリモト ケンジ",
+      "神奈川県横浜市西区架空台7-8-9",
+      "090-2468-1357",
+      "kenji.morimoto@example.co.jp"
+    ]
+  },
+  "名刺_写真.jpg": {
+    "types": [
+      "phone",
+      "email",
+      "address",
+      "postal_code"
+    ],
+    "names": [
+      "小川 由美"
+    ],
+    "readings": [
+      "Yumi Ogawa"
+    ],
+    "risk": [
+      "low",
+      "medium"
+    ],
+    "recommendation": [
+      "keep",
+      "restrict",
+      "review"
+    ],
+    "ocr": [
+      "小川 由美",
+      "Yumi Ogawa",
+      "075-222-3344",
+      "080-1357-2468",
+      "yumi.ogawa@example.com"
+    ]
+  },
+  "崩れた名簿.csv": {
+    "types": [
+      "phone",
+      "email"
+    ],
+    "names": [
+      "石井 誠",
+      "木村 花",
+      "松本 大輔",
+      "井上 彩"
+    ],
+    "readings": [
+      "イシイ マコト",
+      "キムラ ハナ",
+      "マツモト ダイスケ",
+      "イノウエ アヤ"
+    ],
+    "risk": [
+      "medium",
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ]
+  },
+  "全体会議_議事録.docx": {
+    "types": [],
+    "names": [
+      "青木 直樹",
+      "上田 真理",
+      "江口 翔太",
+      "大野 恵子",
+      "岡本 拓也",
+      "片山 智子",
+      "川口 亮",
+      "北村 美穂",
+      "久保 大樹",
+      "小島 沙織",
+      "斎藤 健太",
+      "坂本 陽子",
+      "島田 誠一",
+      "杉山 千尋",
+      "関口 隆",
+      "高田 愛",
+      "竹内 秀樹",
+      "千葉 由紀",
+      "辻 浩",
+      "中島 麻衣",
+      "西村 和也",
+      "野口 裕子",
+      "橋本 剛",
+      "平野 舞",
+      "藤田 悠斗"
+    ],
+    "readings": [],
+    "risk": [
+      "low",
+      "medium"
+    ],
+    "recommendation": [
+      "keep",
+      "review",
+      "restrict"
+    ]
+  },
+  "問い合わせメール.txt": {
+    "types": [
+      "phone",
+      "email",
+      "address",
+      "postal_code"
+    ],
+    "names": [
+      "木村 花"
+    ],
+    "readings": [],
+    "risk": [
+      "medium"
+    ],
+    "recommendation": [
+      "restrict",
+      "review",
+      "delete"
+    ]
+  },
+  "Resume_英文.docx": {
+    "types": [
+      "phone",
+      "email"
+    ],
+    "names": [
+      "Daisuke Matsumoto"
+    ],
+    "readings": [],
+    "risk": [
+      "medium",
+      "high"
+    ],
+    "recommendation": [
+      "restrict",
+      "review"
+    ]
+  },
+  "提出書類_2ページ.pdf": {
+    "types": [
+      "mynumber",
+      "phone",
+      "address",
+      "confidential"
+    ],
+    "names": [
+      "井上 彩"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ],
+    "ocr": [
+      "井上 彩",
+      "112233445560",
+      "静岡県静岡市葵区架空町3-3",
+      "070-3344-5566"
+    ]
+  },
+  "番号っぽいが個人情報ではない.txt": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "keep",
+      "archive",
+      "review"
+    ]
+  }
+}

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from docx import Document
 from openpyxl import Workbook
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from reportlab.lib.pagesizes import A4
@@ -364,6 +364,182 @@ def expected() -> dict[str, dict]:
     return e
 
 
+# ---------------------------------------------------------------- 難しいテストデータ（npm run eval 用）
+#
+# 標準のサンプル（デモ・画面写真に使う）とは別のフォルダに作る。
+# 画像の劣化・表の崩れ・上限を超える人数・英語・番号の紛らわしさなど、AI やルールが間違えやすい形を集める。
+
+HARD_PEOPLE = [
+    ("森本 健司", "モリモト ケンジ", "神奈川県横浜市西区架空台7-8-9", "045-111-2233", "090-2468-1357", "kenji.morimoto@example.co.jp", mynumber("67890123456")),
+    ("小川 由美", "オガワ ユミ", "京都府京都市中京区仮置町10-1", "075-222-3344", "080-1357-2468", "yumi.ogawa@example.com", mynumber("78901234567")),
+    ("石井 誠", "イシイ マコト", "宮城県仙台市青葉区見本台2-3", "022-333-4455", "070-9876-5432", "makoto.ishii@example.jp", mynumber("89012345678")),
+    ("木村 花", "キムラ ハナ", "兵庫県神戸市中央区例示通5-6", "078-444-5566", "090-1122-3344", "hana.kimura@example.co.jp", mynumber("90123456789")),
+    ("松本 大輔", "マツモト ダイスケ", "広島県広島市中区試験町8-1", "082-555-6677", "080-5566-7788", "daisuke.matsumoto@example.com", mynumber("01234567890")),
+    ("井上 彩", "イノウエ アヤ", "静岡県静岡市葵区架空町3-3", "054-666-7788", "070-3344-5566", "aya.inoue@example.jp", mynumber("11223344556")),
+]
+
+# 議事録に出す25人（AI が返せる氏名の上限 20 人を超える）
+_SURNAMES = ["青木", "上田", "江口", "大野", "岡本", "片山", "川口", "北村", "久保", "小島", "斎藤", "坂本", "島田",
+             "杉山", "関口", "高田", "竹内", "千葉", "辻", "中島", "西村", "野口", "橋本", "平野", "藤田"]
+_GIVEN = ["直樹", "真理", "翔太", "恵子", "拓也", "智子", "亮", "美穂", "大樹", "沙織", "健太", "陽子", "誠一",
+          "千尋", "隆", "愛", "秀樹", "由紀", "浩", "麻衣", "和也", "裕子", "剛", "舞", "悠斗"]
+MEETING_PEOPLE = [f"{a} {b}" for a, b in zip(_SURNAMES, _GIVEN)]
+
+
+def degrade(img: Image.Image, angle: float, blur: float, contrast: float, scale: float) -> Image.Image:
+    """かすれたスキャン: 大きな傾き・強いぼかし・薄いコントラスト・解像度の低下・ノイズ。"""
+    img = img.rotate(angle, resample=Image.BICUBIC, expand=False, fillcolor=(236, 234, 226))
+    img = ImageEnhance.Contrast(img).enhance(contrast)
+    w, h = img.size
+    img = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR).resize((w, h), Image.BILINEAR)
+    img = img.filter(ImageFilter.GaussianBlur(blur))
+    px = img.load()
+    for _ in range(w * h // 80):
+        x, y = random.randrange(w), random.randrange(h)
+        v = random.randint(120, 220)
+        px[x, y] = (v, v, v)
+    return img
+
+
+def business_card_photo(p, romaji: str) -> Image.Image:
+    """机の上で撮った名刺の写真（暗い背景・影・傾き）。"""
+    card = Image.new("RGB", (910, 550), (252, 252, 250))
+    d = ImageDraw.Draw(card)
+    d.text((50, 50), "架空ソリューションズ株式会社", font=font(28), fill=(40, 40, 40))
+    d.text((50, 95), "営業本部 第二営業部 課長", font=font(24), fill=(70, 70, 70))
+    d.text((50, 170), p[0], font=font(64, True), fill=(20, 20, 20))
+    d.text((52, 255), romaji, font=font(26), fill=(90, 90, 90))
+    d.text((50, 330), f"〒220-0001 {p[2]}", font=font(22), fill=(50, 50, 50))
+    d.text((50, 375), f"TEL {p[3]}  携帯 {p[4]}", font=font(24), fill=(50, 50, 50))
+    d.text((50, 420), f"E-mail {p[5]}", font=font(24), fill=(50, 50, 50))
+    bg = Image.new("RGB", (1400, 1000), (92, 78, 64))  # 木の机のような背景
+    # 左上から右下へ暗くなる影
+    shade = Image.linear_gradient("L").resize((1400, 1000)).point(lambda v: int(v * 0.55))
+    bg = Image.composite(Image.new("RGB", bg.size, (30, 24, 18)), bg, shade)
+    card = card.rotate(7, resample=Image.BICUBIC, expand=True, fillcolor=(0, 0, 0))
+    mask = Image.new("L", (910, 550), 255).rotate(7, resample=Image.BICUBIC, expand=True)
+    bg.paste(card, (220, 180), mask)
+    return degrade(bg, angle=0, blur=1.1, contrast=0.85, scale=0.6)
+
+
+def generate_hard(out: Path) -> list[tuple[str, str]]:
+    manifest: list[tuple[str, str]] = []
+
+    def add(rel: str, desc: str) -> Path:
+        p = out / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        manifest.append((rel, desc))
+        return p
+
+    x = HARD_PEOPLE[0]
+    p = add("かすれた申込書_スキャン.jpg", "強く劣化したスキャン: 氏名・フリガナ・住所・電話・メール")
+    img = form_image("会員登録申込書", [
+        ("お名前", x[0]), ("フリガナ", x[1]), ("ご住所", x[2]), ("電話番号", x[4]), ("メール", x[5]),
+    ], "記入内容は会員管理にのみ利用します。", angle=0)
+    degrade(img, angle=4.5, blur=1.4, contrast=0.55, scale=0.5).save(p, quality=35)
+
+    x = HARD_PEOPLE[1]
+    p = add("名刺_写真.jpg", "写真に撮った名刺（影・傾き）: 氏名・ローマ字・住所・電話・メール")
+    business_card_photo(x, "Yumi Ogawa").save(p, quality=60)
+
+    p = add("崩れた名簿.csv", "表記ゆれの名簿: 空白なしの氏名・半角カナ・全角数字の電話・空欄")
+    rows = ["No,お名前,ﾌﾘｶﾞﾅ,TEL,メールアドレス,備考"]
+    zen = str.maketrans("0123456789-", "０１２３４５６７８９－")
+    full_kana = list("アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンー")
+    half_kana = list("ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｰ")
+    table = dict(zip(full_kana, half_kana))
+    # 濁点・半濁点つきの文字は、半角では2文字（ｶﾞ）になる
+    table.update({d: table[b] + "ﾞ" for d, b in zip("ガギグゲゴザジズゼゾダヂヅデドバビブベボ", "カキクケコサシスセソタチツテトハヒフヘホ")})
+    table.update({d: table[b] + "ﾟ" for d, b in zip("パピプペポ", "ハヒフヘホ")})
+    half = str.maketrans(table)
+    for i, y in enumerate(HARD_PEOPLE[2:6], 1):
+        name = y[0].replace(" ", "") if i % 2 else y[0]
+        kana = y[1].translate(half)
+        tel = y[4].translate(zen) if i % 2 else y[4]
+        mail = "" if i == 3 else y[5]
+        rows.append(f"{i},{name},{kana},{tel},{mail},{'要確認' if i == 2 else ''}")
+    p.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    p = add("全体会議_議事録.docx", "文章の中に25人の氏名（AI が返せる上限 20 人を超える）")
+    paras = ["日時: 2025年5月20日 14:00-16:00", "出席者: " + "、".join(MEETING_PEOPLE[:13]) + " ほか"]
+    for i in range(13, 25, 2):
+        a = MEETING_PEOPLE[i]
+        b = MEETING_PEOPLE[i + 1] if i + 1 < 25 else MEETING_PEOPLE[0]
+        paras.append(f"{a}さんから進捗の報告があり、{b}さんが来月までに資料をまとめることになった。")
+    write_docx(p, "全体会議 議事録", paras)
+
+    x = HARD_PEOPLE[3]
+    p = add("問い合わせメール.txt", "メール本文の署名欄: 氏名・郵便番号つき住所・電話・メール")
+    p.write_text(
+        "件名: 資料送付のお願い\n\n"
+        "お世話になっております。先日の展示会でお話しした件について、資料をお送りいただけますでしょうか。\n"
+        "よろしくお願いいたします。\n\n"
+        "--\n"
+        f"{x[0]}\n"
+        "架空商事株式会社 総務部\n"
+        f"〒650-0001 {x[2]}\n"
+        f"TEL: {x[3]} / Mobile: {x[4]}\n"
+        f"Mail: {x[5]}\n", encoding="utf-8")
+
+    x = HARD_PEOPLE[4]
+    p = add("Resume_英文.docx", "英語の履歴書: ローマ字の氏名・国際形式の電話・メール")
+    write_docx(p, "Resume", [
+        "Name: Daisuke Matsumoto",
+        "Phone: +81-80-5566-7788",
+        f"Email: {x[5]}",
+        "Address: 8-1 Shiken-cho, Naka-ku, Hiroshima, Japan",
+        "Career: 2015-2025 Sales Manager, Example Trading Co., Ltd.",
+    ])
+
+    x = HARD_PEOPLE[5]
+    p = add("提出書類_2ページ.pdf", "スキャン2ページのPDF: 2ページ目に氏名・個人番号・住所・電話")
+    cover = Image.new("RGB", (1240, 1754), (250, 249, 244))
+    ImageDraw.Draw(cover).text((620, 300), "提出書類（表紙）", font=font(56, True), fill=(20, 20, 20), anchor="mm")
+    ImageDraw.Draw(cover).text((620, 420), "人事部 御中", font=font(36), fill=(30, 30, 30), anchor="mm")
+    cover = scanned_look(cover, 0.5)
+    form = form_image("個人番号 届出書", [
+        ("氏名", x[0]), ("個人番号", " ".join([x[6][:4], x[6][4:8], x[6][8:]])), ("住所", x[2]), ("電話番号", x[4]),
+    ], "※取扱注意", angle=-1.0)
+    cover.save(p, "PDF", resolution=150, save_all=True, append_images=[form])
+
+    p = add("番号っぽいが個人情報ではない.txt", "紛らわしい番号（チェックデジットが合わない）: 個人情報なし")
+    p.write_text(
+        "出荷管理メモ\n"
+        "受注番号: 1234 5678 9010\n"        # 12桁だがマイナンバーのチェックデジットが合わない
+        "追跡番号: 4111 1111 1111 1112\n"   # 16桁だがカード番号の Luhn が合わない
+        "製品コード: 0120-345-678-9\n"
+        "ロット: 2025-0520-0001\n", encoding="utf-8")
+
+    return manifest
+
+
+def expected_hard() -> dict[str, dict]:
+    """難しいテストデータの正解（形式は expected() と同じ）。"""
+    hp = HARD_PEOPLE
+    return {
+        "かすれた申込書_スキャン.jpg": {"types": ["phone", "email", "address"], "names": [hp[0][0]], "readings": [hp[0][1]],
+                                    "risk": ["medium", "high"], "recommendation": ["restrict"],
+                                    "ocr": [hp[0][0], hp[0][1], hp[0][2], hp[0][4], hp[0][5]]},
+        "名刺_写真.jpg": {"types": ["phone", "email", "address", "postal_code"], "names": [hp[1][0]], "readings": ["Yumi Ogawa"],
+                       "risk": ["low", "medium"], "recommendation": ["keep", "restrict", "review"],
+                       "ocr": [hp[1][0], "Yumi Ogawa", hp[1][3], hp[1][4], hp[1][5]]},
+        "崩れた名簿.csv": {"types": ["phone", "email"], "names": [y[0] for y in hp[2:6]],
+                         "readings": [y[1] for y in hp[2:6]],  # 正解は全角で持つ（評価の照合では半角・全角の違いを無視する）
+                         "risk": ["medium", "high"], "recommendation": ["restrict"]},
+        "全体会議_議事録.docx": {"types": [], "names": MEETING_PEOPLE, "readings": [],
+                             "risk": ["low", "medium"], "recommendation": ["keep", "review", "restrict"]},
+        "問い合わせメール.txt": {"types": ["phone", "email", "address", "postal_code"], "names": [hp[3][0]], "readings": [],
+                             "risk": ["medium"], "recommendation": ["restrict", "review", "delete"]},
+        "Resume_英文.docx": {"types": ["phone", "email"], "names": ["Daisuke Matsumoto"], "readings": [],
+                           "risk": ["medium", "high"], "recommendation": ["restrict", "review"]},
+        "提出書類_2ページ.pdf": {"types": ["mynumber", "phone", "address", "confidential"], "names": [hp[5][0]], "readings": [],
+                            "risk": ["high"], "recommendation": ["restrict"],
+                            "ocr": [hp[5][0], hp[5][6], hp[5][2], hp[5][4]]},
+        "番号っぽいが個人情報ではない.txt": {"types": [], "names": [], "readings": [], "risk": ["none", "low"],
+                                    "recommendation": ["keep", "archive", "review"]},
+    }
+
+
 def main() -> None:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "testdata/sample-files").resolve()
     if out.exists():
@@ -385,6 +561,26 @@ def main() -> None:
     (out.parent / "expected.json").write_text(json.dumps(exp, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"generated {len(manifest)} files -> {out}")
     for rel, desc in manifest:
+        print(f"  {rel}  ({desc})")
+
+    # 難しいテストデータ（評価用）。標準のサンプルとは別のフォルダに作る
+    hard_out = out.parent / "hard-files"
+    if hard_out.exists():
+        shutil.rmtree(hard_out)
+    hard_out.mkdir(parents=True)
+    hard_manifest = generate_hard(hard_out)
+    hard_exp = expected_hard()
+    missing = sorted({rel for rel, _ in hard_manifest} ^ set(hard_exp))
+    if missing:
+        raise SystemExit(f"expected_hard() と生成したファイルが一致しません: {missing}")
+    (out.parent / "expected-hard.json").write_text(json.dumps(hard_exp, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    body += ["", "## 難しいテストデータ（hard-files、評価用）", "",
+             "画像の劣化・表の崩れ・上限を超える人数・英語・紛らわしい番号など、AI やルールが間違えやすい形を集めたものです。", "",
+             "| ファイル | 難しさ |", "|---|---|"]
+    body += [f"| {rel} | {desc} |" for rel, desc in hard_manifest]
+    readme.write_text("\n".join(body) + "\n", encoding="utf-8")
+    print(f"generated {len(hard_manifest)} files -> {hard_out}")
+    for rel, desc in hard_manifest:
         print(f"  {rel}  ({desc})")
 
 

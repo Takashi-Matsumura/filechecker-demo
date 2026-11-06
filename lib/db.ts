@@ -136,7 +136,12 @@ function open(): DatabaseSync {
     db.exec(`ALTER TABLE scans ADD COLUMN walked INTEGER NOT NULL DEFAULT 0`);
     db.exec(`UPDATE scans SET walked=1 WHERE total > 0`);
   }
-  const fileCols = db.prepare(`PRAGMA table_info(files)`).all() as { name: string }[];
+  const evalCols = db.prepare(`PRAGMA table_info(ai_evals)`).all() as { name: string }[];
+  if (!evalCols.some((c) => c.name === "dataset")) {
+    // 評価に使ったテストデータ（sample = 標準 / hard = 難しい）
+    db.exec(`ALTER TABLE ai_evals ADD COLUMN dataset TEXT NOT NULL DEFAULT 'sample'`);
+  }
+    const fileCols = db.prepare(`PRAGMA table_info(files)`).all() as { name: string }[];
   if (!fileCols.some((c) => c.name === "action_status")) {
     // 社員の対応状況: todo=未対応 / done=対応した / skipped=対応しない
     db.exec(`ALTER TABLE files ADD COLUMN action_status TEXT NOT NULL DEFAULT 'todo'`);
