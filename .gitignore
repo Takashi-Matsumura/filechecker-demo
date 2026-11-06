@@ -43,4 +43,5 @@ next-env.d.ts
 # test data
 /scripts/testdata/.venv/
 /testdata/sample-files/
+/testdata/hard-files/
 /data/

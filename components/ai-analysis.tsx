@@ -278,7 +278,7 @@ function Evals({ stats }: { stats: AiStats }) {
   return (
     <Card
       title="テストデータでの評価"
-      note="テストデータ（すべて架空）の正解と比べた結果です。モデルや指示文を変えたら npm run eval で評価し、同じ物差しで比べられます（期間の絞り込みは効きません）。氏名・読み仮名・ルール検出は「拾えた割合 / 拾ったものが正しい割合」です。"
+      note="テストデータ（すべて架空）の正解と比べた結果です。「標準」はデモ用のサンプル、「難しい」は画像の劣化・表の崩れ・上限を超える人数などを集めたものです。モデルや指示文を変えたら npm run eval で評価し、同じ物差しで比べられます（期間の絞り込みは効きません）。氏名・読み仮名・ルール検出は「拾えた割合 / 拾ったものが正しい割合」です。"
     >
       {stats.evals.length === 0 ? (
         <p className="text-sm text-stone-400">
@@ -287,10 +287,11 @@ function Evals({ stats }: { stats: AiStats }) {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1080px] text-sm">
+          <table className="w-full min-w-[1140px] text-sm">
             <thead className="border-b border-stone-200 text-left text-xs text-stone-500">
               <tr className="whitespace-nowrap">
                 <th className="py-2 pr-3 font-medium">日時</th>
+                <th className="py-2 pr-3 font-medium">データ</th>
                 <th className="py-2 pr-3 font-medium">モデル</th>
                 <th className="py-2 pr-3 font-medium">判定 / 読み取りの版</th>
                 <th className="py-2 pr-3 text-right font-medium">氏名</th>
@@ -309,6 +310,13 @@ function Evals({ stats }: { stats: AiStats }) {
                 return (
                   <tr key={e.id} className="whitespace-nowrap">
                     <td className="whitespace-nowrap py-2 pr-3 text-xs text-stone-500">{date(e.createdAt)}</td>
+                    <td className="py-2 pr-3 text-xs">
+                      {e.dataset === "hard" ? (
+                        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-800 ring-1 ring-amber-200">難しい</span>
+                      ) : (
+                        <span className="text-stone-500">標準</span>
+                      )}
+                    </td>
                     <td className="py-2 pr-3 font-mono text-xs">{e.model ?? "—"}</td>
                     <td className="py-2 pr-3 font-mono text-xs">
                       {e.judgeVersion} / {e.ocrVersion}

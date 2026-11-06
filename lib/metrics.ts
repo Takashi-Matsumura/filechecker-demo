@@ -394,6 +394,8 @@ export interface EvalMetrics {
 
 export interface EvalRun {
   id: number;
+  /** 評価に使ったテストデータ（sample = 標準 / hard = 難しい） */
+  dataset: string;
   createdAt: string;
   model: string | null;
   judgeVersion: string;
@@ -409,12 +411,13 @@ export function listEvals(limit = 20): EvalRun[] {
   try {
     rows = db()
     .prepare(`SELECT * FROM ai_evals ORDER BY id DESC LIMIT ?`)
-    .all(limit) as { id: number; created_at: string; model: string | null; judge_version: string; ocr_version: string; files: number; duration_ms: number; metrics_json: string }[];
+    .all(limit) as { id: number; created_at: string; dataset: string; model: string | null; judge_version: string; ocr_version: string; files: number; duration_ms: number; metrics_json: string }[];
   } catch {
     return []; // 表がまだ無い（起動し直す前）など
   }
   return rows.map((r) => ({
     id: r.id,
+    dataset: r.dataset ?? "sample",
     createdAt: r.created_at,
     model: r.model,
     judgeVersion: r.judge_version,

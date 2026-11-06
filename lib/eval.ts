@@ -25,7 +25,8 @@ interface Expected {
 }
 
 const RANK: Record<string, number> = { none: 0, low: 1, medium: 2, high: 3 };
-const norm = (s: string) => s.replace(/[\s　]/g, "");
+/** 照合用に正規化する（半角・全角の違いと空白を無視する。ﾔﾏﾀﾞ → ヤマダ、０９０ → 090） */
+const norm = (s: string) => s.normalize("NFKC").replace(/[\s　]/g, "").toLowerCase();
 const zero = (): Counts => ({ tp: 0, fp: 0, fn: 0 });
 const addCounts = (a: Counts, b: Counts) => ((a.tp += b.tp), (a.fp += b.fp), (a.fn += b.fn));
 
@@ -43,6 +44,7 @@ const containsLoose = (text: string, s: string) => norm(text).includes(norm(s));
 
 export interface EvalResult {
   id: number | null;
+  dataset: Dataset;
   model: string | null;
   judgeVersion: string;
   ocrVersion: string;
@@ -50,12 +52,20 @@ export interface EvalResult {
   metrics: EvalMetrics;
 }
 
+/** 評価に使うテストデータ（フォルダと正解ファイル） */
+export const DATASETS = {
+  sample: { dir: "sample-files", expected: "expected.json", label: "標準" },
+  hard: { dir: "hard-files", expected: "expected-hard.json", label: "難しい" },
+} as const;
+export type Dataset = keyof typeof DATASETS;
+
 /** 評価を実行する。進み具合は log に1行ずつ渡す */
-export async function runEval(root: string, log: (line: string) => void = () => {}): Promise<EvalResult> {
+export async function runEval(root: string, dataset: Dataset = "sample", log: (line: string) => void = () => {}): Promise<EvalResult> {
   const status = await llmStatus();
   if (!status.ok) throw new Error(`ローカル LLM に接続できません: ${status.error ?? ""}`);
-  const expected = JSON.parse(await fs.readFile(path.join(root, "expected.json"), "utf8")) as Record<string, Expected>;
-  const dir = path.join(root, "sample-files");
+  const ds = DATASETS[dataset];
+  const expected = JSON.parse(await fs.readFile(path.join(root, ds.expected), "utf8")) as Record<string, Expected>;
+  const dir = path.join(root, ds.dir);
   const staleBefore = new Date();
   staleBefore.setFullYear(staleBefore.getFullYear() - config.staleYears);
 
@@ -174,14 +184,14 @@ export async function runEval(root: string, log: (line: string) => void = () => 
     id = Number(
       db()
         .prepare(
-          `INSERT INTO ai_evals (created_at, model, judge_version, ocr_version, files, duration_ms, metrics_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO ai_evals (created_at, dataset, model, judge_version, ocr_version, files, duration_ms, metrics_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(new Date().toISOString(), status.model ?? null, JUDGE_VERSION, OCR_VERSION, entries.length, Math.round(durationMs), JSON.stringify(m))
+        .run(new Date().toISOString(), dataset, status.model ?? null, JUDGE_VERSION, OCR_VERSION, entries.length, Math.round(durationMs), JSON.stringify(m))
         .lastInsertRowid,
     );
   } catch {
     // 記録できなくても、結果は画面（コンソール）に出す
   }
-  return { id, model: status.model ?? null, judgeVersion: JUDGE_VERSION, ocrVersion: OCR_VERSION, durationMs, metrics: m };
+  return { id, dataset, model: status.model ?? null, judgeVersion: JUDGE_VERSION, ocrVersion: OCR_VERSION, durationMs, metrics: m };
 }
