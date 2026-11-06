@@ -29,7 +29,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.5",
+    "eslint-plugin-regexp": "3.3.1",
     "jiti": "^2.7.0",
+    "recheck": "4.5.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   },

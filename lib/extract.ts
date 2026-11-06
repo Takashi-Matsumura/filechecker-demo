@@ -92,8 +92,9 @@ function paragraphsText(xml: string, ns: "w" | "a"): string {
     .join("\n");
 }
 
-const byNumber = (a: string, b: string) =>
-  Number(a.match(/(\d+)\.xml$/)?.[1] ?? 0) - Number(b.match(/(\d+)\.xml$/)?.[1] ?? 0);
+/** 名前の末尾の番号（slide12.xml の 12）。数字の並びの先頭からだけ照合する（線形時間で終わるように） */
+const numberOf = (name: string) => Number(name.match(/(?<!\d)(\d+)\.xml$/)?.[1] ?? 0);
+const byNumber = (a: string, b: string) => numberOf(a) - numberOf(b);
 
 function extractOffice(buf: Buffer, ext: string): string {
   // ZIP 爆弾対策: 必要な XML だけを展開し、申告された展開後サイズの合計と件数に上限を設ける。
