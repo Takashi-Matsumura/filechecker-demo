@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { BackLink } from "./back-link";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { ActionList } from "./action-list";
 import type { FileItem, ScanData } from "./actions";
@@ -97,13 +97,13 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <Link href="/" className="text-xs text-teal-700 underline underline-offset-2">
-          ← ホーム
-        </Link>
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-bold tracking-tight">棚卸し結果</h1>
-            <p className="truncate font-mono text-xs text-stone-500">{scan.root}</p>
+          <div className="flex min-w-0 items-start gap-3">
+            <BackLink href="/" label="ホームに戻る" />
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold tracking-tight">棚卸し結果</h1>
+              <p className="truncate font-mono text-xs text-stone-500">{scan.root}</p>
+            </div>
           </div>
           <p className="text-xs text-stone-500">
             {formatDateTime(scan.created_at)}
