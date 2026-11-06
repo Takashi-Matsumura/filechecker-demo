@@ -228,11 +228,11 @@ function nameVariants(names: string[]): string[] {
   for (const raw of names) {
     const parts = raw.trim().split(/[\s　]+/).filter(Boolean);
     const full = parts.join("");
-    // 2文字未満は伏せすぎ、長すぎるものは氏名ではない（照合の手間も名前の長さに比例するため上限を設ける）
-    if (full.length < 2 || full.length > MAX_NAME_LENGTH) continue;
-    out.add(full);
+    // 2文字未満は伏せすぎになるので対象外。長すぎるものも飛ばさずに、区切って伏せる
+    if (full.length < 2) continue;
+    addChunked(out, full);
     if (parts.length > 1) {
-      for (const p of parts) if (p.length >= 2) out.add(p);
+      for (const p of parts) if (p.length >= 2) addChunked(out, p);
     } else if (full.length >= 4 && !KANA_ONLY.test(full)) {
       // 推定の姓（AI が要約などで姓だけ書くことがあるため）。
       // カナだけの読み仮名は先頭2文字が他の語と重なりやすい（「ヤマ」→「ヤマト」）ので対象外
@@ -244,13 +244,29 @@ function nameVariants(names: string[]): string[] {
 }
 
 const KANA_ONLY = /^[ぁ-ゖァ-ヶｦ-ﾟー・･]+$/;
-/** 伏せる対象にする名前の長さの上限（空白を除く）。AI の出力も氏名20字・読み仮名30字まで */
+/**
+ * 照合に使う1件の長さの上限（空白を除く）。照合の手間はこの長さに比例するので抑える。
+ * これより長い名前は飛ばさず、1文字ずつ重ねて区切った断片をすべて照合に使う。
+ * 断片どうしは重なるので、一致した範囲は1つにまとまり、名前全体が伏せられる。
+ */
 const MAX_NAME_LENGTH = 30;
+
+function addChunked(out: Set<string>, v: string) {
+  if (v.length <= MAX_NAME_LENGTH) {
+    out.add(v);
+    return;
+  }
+  for (let start = 0; ; start += MAX_NAME_LENGTH - 1) {
+    const end = Math.min(start + MAX_NAME_LENGTH, v.length);
+    out.add(v.slice(end - MAX_NAME_LENGTH, end));
+    if (end === v.length) break;
+  }
+}
 
 // ---------------------------------------------------------------- 書式から拾う氏名・読み仮名
 
-// 1語は15文字まで（極端に長いカナの並びを読み仮名として拾わない）。前後がカナに続く場合も拾わない
-const KANA_WORD = "(?:(?<![ァ-ヶｦ-ﾟー・･])[ァ-ヶｦ-ﾟー・･]{1,15}(?![ァ-ヶｦ-ﾟー・･])|(?<![ぁ-ゖー])[ぁ-ゖー]{1,15}(?![ぁ-ゖー]))";
+// 1語の長さに上限は設けない（長い読み仮名も飛ばさずに伏せる。照合は区切って行うので遅くならない）
+const KANA_WORD = "(?:[ァ-ヶｦ-ﾟー・･]+|[ぁ-ゖー]+)";
 const READING_LABEL = "(?:フリガナ|ふりがな|ﾌﾘｶﾞﾅ|よみがな|ヨミガナ|読み仮名|カナ氏名|氏名カナ|氏名[（(]カナ[）)]|カナ)";
 // 見出しの前が文字でなく（「カナダ」を拾わない）、見出しと値の間に空白かコロンがあること
 const SEP = "(?:[ 　]*[:：][ 　]*|[ 　]+)";
@@ -358,7 +374,7 @@ const isSpace = (c: string) => /[\s　]/.test(c);
  * 表記ゆれ（「高橋美咲」と「高橋 美咲」）に対応するため、文字間の空白を無視して照合する。
  * すべての名前を1つの木（トライ）にまとめ、本文を1回だけ走査するので、
  * 名前が何千件あっても時間は本文の長さにほぼ比例する（件数の上限は設けない）。
- * 名前の長さは MAX_NAME_LENGTH までなので、最悪でも「本文の長さ × その文字数」で終わる。
+ * 照合に使う1件は MAX_NAME_LENGTH 文字までなので、最悪でも「本文の長さ × その文字数」で終わる。
  * 改行やタブをまたぐ一致も拾う（OCR で「山田\n太郎」のように行が分かれることがあるため）。
  * 重なり合う一致はすべて拾って1つの範囲にまとめる（例: 「田佐」と「佐藤花子」→「田＊＊＊＊」）。
  * 氏名の文字列そのものを保存せずに、あとで同じ箇所を伏せ直すために使う。
@@ -385,7 +401,7 @@ export function findNameRanges(text: string, names: string[]): NameRange[] {
     pos.push(i);
   }
   const ranges: NameRange[] = [];
-  // 名前は MAX_NAME_LENGTH 文字までなので、1つの開始位置から辿るのは最大でその文字数
+  // 照合に使う1件は MAX_NAME_LENGTH 文字までなので、1つの開始位置から辿るのは最大でその文字数
   for (let s = 0; s < chars.length; s++) {
     let node: TrieNode | undefined = root;
     let longest = -1;
