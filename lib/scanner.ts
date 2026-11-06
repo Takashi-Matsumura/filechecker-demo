@@ -383,7 +383,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
 
   const names = (ai?.person_names ?? []).filter((n) => n.trim().length >= 2);
   // 読み仮名（「ヤマダ タロウ」など）も伏せる。AI の結果に、書式から拾ったものを足す（件数には数えない）
-  const readings = [...new Set([...(ai?.name_readings ?? []), ...findNameReadings(text)])].filter((n) => n.trim().length >= 2);
+  const readings = [...new Set([...(ai?.name_readings ?? []).slice(0, 20), ...findNameReadings(text)])].filter((n) => n.trim().length >= 2);
   const maskTargets = [...names, ...readings];
   // プレビューで同じ箇所を伏せ直せるよう、氏名の「位置」だけを残す（マスク後テキスト上の座標）
   const nameRanges = findNameRanges(masked, maskTargets);

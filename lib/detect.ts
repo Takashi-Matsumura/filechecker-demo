@@ -256,6 +256,11 @@ const READING_INLINE = new RegExp(
 );
 const READING_HEADER = new RegExp(`^${READING_LABEL}$`);
 const KANA_CELL = new RegExp(`^${KANA_WORD}(?:[ 　]${KANA_WORD})?$`);
+/**
+ * 拾う読み仮名の上限。伏せる処理は1件ごとに本文全体を調べるので、
+ * 巨大な名簿で処理が止まらないように抑える（AI が返す氏名も20件まで）。
+ */
+const MAX_READINGS = 100;
 
 /**
  * 本文から氏名の読み仮名を拾う（AI の拾い漏れに備えたルール）。
@@ -264,25 +269,29 @@ const KANA_CELL = new RegExp(`^${KANA_WORD}(?:[ 　]${KANA_WORD})?$`);
  */
 export function findNameReadings(text: string): string[] {
   const out = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
+  const add = (v: string) => {
+    if (out.size < MAX_READINGS && v.replace(/[\s　]/g, "").length >= 2) out.add(v);
+  };
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (out.size >= MAX_READINGS) break;
     // 表の行（タブ・カンマ区切り）は列で判断するので、ここでは扱わない
     if (/[\t,]/.test(line)) continue;
-    for (const m of line.matchAll(READING_INLINE)) {
-      const v = m[1].trim();
-      if (v.replace(/[\s　]/g, "").length >= 2) out.add(v);
-    }
+    for (const m of line.matchAll(READING_INLINE)) add(m[1].trim());
   }
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
+  // 表は見出し行から下を1回だけ読む（読んだ行は飛ばして、同じ行を何度も読み直さない）
+  for (let i = 0; i < lines.length && out.size < MAX_READINGS; i++) {
     for (const sep of ["\t", ","]) {
       const header = lines[i].split(sep).map((c) => c.trim().replace(/^"|"$/g, ""));
       if (header.length < 2) continue;
       const col = header.findIndex((c) => READING_HEADER.test(c));
       if (col < 0) continue;
-      for (let j = i + 1; j < lines.length && lines[j].trim(); j++) {
-        const cell = (lines[j].split(sep)[col] ?? "").trim().replace(/^"|"$/g, "");
-        if (KANA_CELL.test(cell) && cell.replace(/[\s　]/g, "").length >= 2) out.add(cell);
+      let j = i + 1;
+      for (; j < lines.length && lines[j].trim() && out.size < MAX_READINGS; j++) {
+        add((lines[j].split(sep)[col] ?? "").trim().replace(/^"|"$/g, "").match(KANA_CELL)?.[0] ?? "");
       }
+      i = j - 1;
+      break;
     }
   }
   return [...out];
