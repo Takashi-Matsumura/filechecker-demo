@@ -18,9 +18,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <Logo />
               ファイル棚卸しアシスタント
             </Link>
-            <span className="rounded-full bg-teal-50 px-3 py-1 text-xs text-teal-800 ring-1 ring-teal-200">
-              完全ローカル処理 · 外部送信なし
-            </span>
+            <div className="flex items-center gap-3">
+              <Link href="/ai" className="text-xs text-stone-600 underline-offset-2 hover:text-teal-700 hover:underline">
+                AI の分析
+              </Link>
+              <span className="rounded-full bg-teal-50 px-3 py-1 text-xs text-teal-800 ring-1 ring-teal-200">
+                完全ローカル処理 · 外部送信なし
+              </span>
+            </div>
           </div>
         </header>
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>

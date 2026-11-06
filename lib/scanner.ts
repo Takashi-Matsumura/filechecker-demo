@@ -21,7 +21,8 @@ import {
   type NameRange,
 } from "./detect";
 import { extract, kindOf } from "./extract";
-import { judgeFile, resolveConcurrency, type AiJudgement } from "./llm";
+import { JUDGE_VERSION, judgeFile, resolveConcurrency, type AiJudgement } from "./llm";
+import { countOverlap, recordFileStats, type CallContext } from "./metrics";
 
 // ---------------------------------------------------------------- パス検証
 
@@ -360,7 +361,8 @@ const FALLBACK_REC: Record<Level, AiJudgement["recommendation"]> = {
 
 async function processFile(id: number, root: string, ext: string, signal: AbortSignal) {
   const d = db();
-  const row = d.prepare(`SELECT rel_path, size, mtime, is_stale, dup_of FROM files WHERE id=?`).get(id) as {
+  const row = d.prepare(`SELECT scan_id, rel_path, size, mtime, is_stale, dup_of FROM files WHERE id=?`).get(id) as {
+    scan_id: number;
     rel_path: string;
     size: number;
     mtime: string;
@@ -368,6 +370,8 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
     dup_of: number | null;
   };
 
+  // 性能分析の記録（lib/metrics.ts）に残す、どの棚卸しのどのファイルの処理か
+  const ctx: CallContext = { scanId: row.scan_id, fileId: id, ext };
   let text = "";
   let method = "none";
   const notes: string[] = [];
@@ -376,7 +380,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   if (buf === "too_large") {
     notes.push("サイズが大きいため内容は未検査");
   } else {
-    const r = await extract(buf, ext, signal);
+    const r = await extract(buf, ext, signal, { ctx });
     text = r.text;
     method = r.method;
     if (r.note) notes.push(r.note);
@@ -399,7 +403,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
       extractMethod: method,
       ruleSummary,
       text: masked.slice(0, 6000),
-    }, signal);
+    }, signal, ctx);
   } catch (e) {
     // 中断による打ち切りは失敗扱いにせず、呼び出し元で「未処理」に戻す
     if (signal.aborted) throw e;
@@ -407,9 +411,11 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   }
 
   // 氏名は AI の推定（20件まで）に、書式（名簿の「氏名」列など）から拾ったものを足す。大きな名簿でも全員を伏せるため
-  const names = uniqueNames([...(ai?.person_names ?? []), ...findNamesByLayout(text)]);
+  const layoutNames = findNamesByLayout(text);
+  const names = uniqueNames([...(ai?.person_names ?? []), ...layoutNames]);
   // 読み仮名（「ヤマダ タロウ」など）も伏せる。AI の結果に、書式から拾ったものを足す（件数には数えない）
-  const readings = uniqueNames([...(ai?.name_readings ?? []), ...findNameReadings(text)]);
+  const layoutReadings = findNameReadings(text);
+  const readings = uniqueNames([...(ai?.name_readings ?? []), ...layoutReadings]);
   const maskTargets = [...names, ...readings];
   // プレビューで同じ箇所を伏せ直せるよう、氏名の「位置」だけを残す（マスク後テキスト上の座標）
   const nameRanges = findNameRanges(masked, maskTargets);
@@ -467,6 +473,32 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
     ocrPreview ? JSON.stringify(ocrPreview) : null,
     id,
   );
+
+  // 性能分析: ルール・AI・書式の判断を並べて記録する（本文や氏名そのものは残さない）
+  const aiNames = uniqueNames(ai?.person_names ?? []);
+  const aiReadings = uniqueNames(ai?.name_readings ?? []);
+  const uLayoutNames = uniqueNames(layoutNames);
+  const uLayoutReadings = uniqueNames(layoutReadings);
+  recordFileStats({
+    scanId: row.scan_id,
+    fileId: id,
+    ext,
+    extractMethod: method,
+    ruleLevel: ruleLevel(findings),
+    aiOk: ai !== null,
+    aiRisk: ai?.risk ?? null,
+    finalRisk: risk,
+    aiRecommendation: ai?.recommendation ?? null,
+    finalRecommendation: aiStored.recommendation ?? null,
+    namesAi: aiNames.length,
+    namesLayout: uLayoutNames.length,
+    namesBoth: countOverlap(aiNames, uLayoutNames),
+    readingsAi: aiReadings.length,
+    readingsLayout: uLayoutReadings.length,
+    readingsBoth: countOverlap(aiReadings, uLayoutReadings),
+    findingTypes: findings.map((f) => f.type),
+    promptVersion: ai ? JUDGE_VERSION : null,
+  });
 }
 
 // ---------------------------------------------------------------- 参照系
