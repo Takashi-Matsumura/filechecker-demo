@@ -285,10 +285,15 @@ npm run dev        # http://127.0.0.1:3000
 npm run typecheck  # 型チェック
 npm run lint       # Lint
 npm test           # 単体テスト（ルール検出・伏せ方・Office の読み取り・やることの区分・アクセスの制限・AI の応答の検証。AI は呼ばない）
+                   # あわせて、アプリのすべての正規表現が極端に遅くならないことを recheck で調べる
 npm run build      # 本番ビルド
 ```
 
-GitHub では、PR と main への push のたびに CI（`.github/workflows/ci.yml`）がこの 4 つを実行します。AI の精度は CI では測らないので、検出ルールや指示文を変えたときは、手元で `npm run eval` も実行してください。
+GitHub では、PR と main への push のたびに CI（`.github/workflows/ci.yml`）がこの 4 つを実行します。
+
+検出のルールや Office の読み取りは、社員のファイルの中身という信頼できない入力を読みます。正規表現の書き方によっては、特定の入力で処理時間が長さの二乗以上に増え、サーバ全体が止まります。これを人の注意に頼らずに防ぐため、2 つの仕組みで調べています。
+- **Lint**（`eslint-plugin-regexp`）: コードに直接書いた正規表現の、遅くなる書き方をエラーにします。
+- **単体テスト**（`tests/regex-safety.test.ts`、`recheck`）: コードに直接書いたものと、`new RegExp` で組み立てるものの両方を自動で集めて調べます。正規表現を足しても、テストへの登録は要りません。AI の精度は CI では測らないので、検出ルールや指示文を変えたときは、手元で `npm run eval` も実行してください。
 
 ## 設定（環境変数）
 
