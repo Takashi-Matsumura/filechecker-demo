@@ -228,7 +228,8 @@ function nameVariants(names: string[]): string[] {
   for (const raw of names) {
     const parts = raw.trim().split(/[\s　]+/).filter(Boolean);
     const full = parts.join("");
-    if (full.length < 2) continue;
+    // 2文字未満は伏せすぎ、長すぎるものは氏名ではない（照合の手間も名前の長さに比例するため上限を設ける）
+    if (full.length < 2 || full.length > MAX_NAME_LENGTH) continue;
     out.add(full);
     if (parts.length > 1) {
       for (const p of parts) if (p.length >= 2) out.add(p);
@@ -243,10 +244,13 @@ function nameVariants(names: string[]): string[] {
 }
 
 const KANA_ONLY = /^[ぁ-ゖァ-ヶｦ-ﾟー・･]+$/;
+/** 伏せる対象にする名前の長さの上限（空白を除く）。AI の出力も氏名20字・読み仮名30字まで */
+const MAX_NAME_LENGTH = 30;
 
 // ---------------------------------------------------------------- 書式から拾う氏名・読み仮名
 
-const KANA_WORD = "(?:[ァ-ヶｦ-ﾟー・･]+|[ぁ-ゖー]+)";
+// 1語は15文字まで（極端に長いカナの並びを読み仮名として拾わない）。前後がカナに続く場合も拾わない
+const KANA_WORD = "(?:(?<![ァ-ヶｦ-ﾟー・･])[ァ-ヶｦ-ﾟー・･]{1,15}(?![ァ-ヶｦ-ﾟー・･])|(?<![ぁ-ゖー])[ぁ-ゖー]{1,15}(?![ぁ-ゖー]))";
 const READING_LABEL = "(?:フリガナ|ふりがな|ﾌﾘｶﾞﾅ|よみがな|ヨミガナ|読み仮名|カナ氏名|氏名カナ|氏名[（(]カナ[）)]|カナ)";
 // 見出しの前が文字でなく（「カナダ」を拾わない）、見出しと値の間に空白かコロンがあること
 const SEP = "(?:[ 　]*[:：][ 　]*|[ 　]+)";
@@ -354,6 +358,8 @@ const isSpace = (c: string) => /[\s　]/.test(c);
  * 表記ゆれ（「高橋美咲」と「高橋 美咲」）に対応するため、文字間の空白を無視して照合する。
  * すべての名前を1つの木（トライ）にまとめ、本文を1回だけ走査するので、
  * 名前が何千件あっても時間は本文の長さにほぼ比例する（件数の上限は設けない）。
+ * 名前の長さは MAX_NAME_LENGTH までなので、最悪でも「本文の長さ × その文字数」で終わる。
+ * 改行やタブをまたぐ一致も拾う（OCR で「山田\n太郎」のように行が分かれることがあるため）。
  * 重なり合う一致はすべて拾って1つの範囲にまとめる（例: 「田佐」と「佐藤花子」→「田＊＊＊＊」）。
  * 氏名の文字列そのものを保存せずに、あとで同じ箇所を伏せ直すために使う。
  */
@@ -379,13 +385,17 @@ export function findNameRanges(text: string, names: string[]): NameRange[] {
     pos.push(i);
   }
   const ranges: NameRange[] = [];
+  // 名前は MAX_NAME_LENGTH 文字までなので、1つの開始位置から辿るのは最大でその文字数
   for (let s = 0; s < chars.length; s++) {
     let node: TrieNode | undefined = root;
+    let longest = -1;
     for (let e = s; e < chars.length; e++) {
       node = node.next.get(chars[e]);
       if (!node) break;
-      if (node.end) ranges.push([pos[s], pos[e] + 1]);
+      if (node.end) longest = e;
     }
+    // 同じ開始位置の短い一致は最長の一致に含まれ、どうせ1つにまとめるので、最長だけを残す
+    if (longest >= 0) ranges.push([pos[s], pos[longest] + 1]);
   }
   const merged: NameRange[] = [];
   for (const r of ranges.sort((a, b) => a[0] - b[0])) {
