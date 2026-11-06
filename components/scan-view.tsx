@@ -9,6 +9,18 @@ import { ScanAnalysis } from "./scan-dashboard";
 
 type Tab = "actions" | "analysis";
 
+/** 残り時間を「約2時間10分」のように表す */
+function formatDuration(ms: number): string {
+  const min = Math.round(ms / 60000);
+  if (min < 1) return "1分未満";
+  if (min < 60) return `約${min}分`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h < 24) return m ? `約${h}時間${m}分` : `約${h}時間`;
+  const d = Math.floor(h / 24);
+  return h % 24 ? `約${d}日${h % 24}時間` : `約${d}日`;
+}
+
 /** 実行中（ポーリングを続ける）状態 */
 const RUNNING = new Set(["queued", "walking", "processing", "pausing"]);
 
@@ -35,21 +47,58 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
     history.replaceState(null, "", t === "analysis" ? "#analysis" : window.location.pathname);
   };
 
+  // 残り時間の目安（解析中の進み具合から計算する）
+  const [eta, setEta] = useState<number | null>(null);
+
   useEffect(() => {
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
+    let tick = 0;
+    // 解析が進んだ件数と時刻の記録（残り時間の計算用）。再開するたびに取り直す
+    let first: { t: number; done: number } | null = null;
+
+    /** ファイルの一覧も含めて取り直す（やることの表示を更新する） */
+    const loadFull = async (): Promise<ScanData["scan"] | null> => {
       const res = await fetch(`/api/scans/${id}`);
       if (res.status === 404) {
         setNotFound(true);
-        return;
+        return null;
       }
       const j: ScanData = await res.json();
-      if (stop) return;
+      if (stop) return null;
       setData(j);
-      if (RUNNING.has(j.scan.status)) timer = setTimeout(load, 2000);
+      return j.scan;
     };
-    load().catch(() => {});
+    /** 進み具合だけを取り直す（ファイルが多くても軽い） */
+    const loadSummary = async (): Promise<ScanData["scan"] | null> => {
+      const res = await fetch(`/api/scans/${id}?files=0`);
+      if (!res.ok) return null;
+      const j: { scan: ScanData["scan"] } = await res.json();
+      if (stop) return null;
+      setData((prev) => (prev ? { ...prev, scan: j.scan } : prev));
+      return j.scan;
+    };
+    const updateEta = (scan: ScanData["scan"]) => {
+      if (scan.status !== "processing" || !scan.total) return setEta(null);
+      const now = Date.now();
+      if (!first) first = { t: now, done: scan.processed };
+      const rate = (scan.processed - first.done) / (now - first.t); // 件 / ミリ秒
+      setEta(rate > 0 ? (scan.total - scan.processed) / rate : null);
+    };
+
+    // 進み具合は2秒ごと、ファイルの一覧は20秒ごとに取り直す
+    const step = async (full: boolean) => {
+      const scan = full ? await loadFull() : await loadSummary();
+      if (!scan || stop) return;
+      updateEta(scan);
+      if (RUNNING.has(scan.status)) {
+        tick++;
+        timer = setTimeout(() => void step(tick % 10 === 0).catch(() => {}), 2000);
+      } else if (!full) {
+        await loadFull(); // 終わったら、最終的な結果を取り直す
+      }
+    };
+    step(true).catch(() => {});
     return () => {
       stop = true;
       clearTimeout(timer);
@@ -136,6 +185,17 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
               aria-valuenow={scan.processed}
             >
               {pct > 0 && <div className="aqua-progress-bar aqua-teal" style={{ width: `${pct}%` }} />}
+            </div>
+            <div className="mt-2 space-y-1 text-xs text-teal-900">
+              {scan.status === "walking" && (
+                <p>
+                  ファイルを数えています（<span className="tabular-nums">{scan.total.toLocaleString()}</span>件まで確認）。数え終わると解析を始めます。
+                </p>
+              )}
+              {eta !== null && <p>残り {formatDuration(eta)}（これまでの進み具合からの目安）</p>}
+              <p className="text-teal-800/80">
+                ファイルが多いと時間がかかります。PC がスリープすると処理が止まるので、終わるまでスリープしない設定にしてください。途中で止まっても、あとから「再開」で続きから進められます。
+              </p>
             </div>
           </div>
         )}

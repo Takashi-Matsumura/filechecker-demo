@@ -165,14 +165,11 @@ interface Entry {
 }
 
 /**
- * 棚卸しするファイルの一覧を作る。上限（config.maxFiles）に達したら打ち切る。
- * truncated は、上限を超えるファイルが実際にあったか（棚卸ししていないファイルが残っているか）。
+ * 棚卸しするファイルを、見つけたそばから1件ずつ返す（全件をメモリに持たない）。
+ * 上限（config.maxFiles）に達したら打ち切り、state.truncated に印を付ける。
  */
-async function walk(root: string, signal: AbortSignal): Promise<{ entries: Entry[]; truncated: boolean }> {
-  const out: Entry[] = [];
-  let truncated = false;
-  async function rec(dir: string) {
-    if (truncated) return;
+async function* walk(root: string, signal: AbortSignal, state: { count: number; truncated: boolean }): AsyncGenerator<Entry> {
+  async function* rec(dir: string): AsyncGenerator<Entry> {
     signal.throwIfAborted();
     let entries;
     try {
@@ -182,20 +179,23 @@ async function walk(root: string, signal: AbortSignal): Promise<{ entries: Entry
     }
     entries.sort((a, b) => a.name.localeCompare(b.name, "ja"));
     for (const e of entries) {
-      if (truncated) return;
+      if (state.truncated) return;
       if (e.name.startsWith(".") || e.name === "node_modules") continue;
       const abs = path.join(dir, e.name);
       // シンボリックリンクは辿らない（許可ルートの外に出ないため）
-      if (e.isDirectory()) await rec(abs);
+      if (e.isDirectory()) yield* rec(abs);
       else if (e.isFile()) {
         // 上限に達したあとに、まだファイルが見つかった = 棚卸ししきれないファイルがある
-        if (out.length >= config.maxFiles) truncated = true;
-        else out.push({ abs, rel: path.relative(root, abs) });
+        if (state.count >= config.maxFiles) {
+          state.truncated = true;
+          return;
+        }
+        state.count++;
+        yield { abs, rel: path.relative(root, abs) };
       }
     }
   }
-  await rec(root);
-  return { entries: out, truncated };
+  yield* rec(root);
 }
 
 async function sha256(file: string): Promise<string> {
@@ -209,12 +209,14 @@ async function sha256(file: string): Promise<string> {
   return h.digest("hex");
 }
 
-/** ファイル一覧を作り、ハッシュ・重複・古さを記録する。中断されたら途中の一覧は捨てて最初からやり直す */
+/**
+ * ファイル一覧を作り、ハッシュ・重複・古さを記録する。中断されたら途中の一覧は捨てて最初からやり直す。
+ * ファイルは見つけたそばから DB に入れ、件数（total）も随時更新する（大きなフォルダでも進み具合が見えるように）。
+ */
 async function buildFileList(scanId: number, root: string, signal: AbortSignal) {
   const d = db();
-  d.prepare(`UPDATE scans SET status='walking' WHERE id=? AND status<>'pausing'`).run(scanId);
+  d.prepare(`UPDATE scans SET status='walking', total=0, truncated=0 WHERE id=? AND status<>'pausing'`).run(scanId);
   d.prepare(`DELETE FROM files WHERE scan_id=?`).run(scanId);
-  const { entries, truncated } = await walk(root, signal);
 
   const staleBefore = new Date();
   staleBefore.setFullYear(staleBefore.getFullYear() - config.staleYears);
@@ -223,32 +225,31 @@ async function buildFileList(scanId: number, root: string, signal: AbortSignal) 
     `INSERT INTO files (scan_id, rel_path, ext, kind, size, mtime, sha256, status, is_stale)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
   );
-  const byHash = new Map<string, { id: number; mtime: number; rel: string }[]>();
-  const setDup = d.prepare(`UPDATE files SET dup_of=? WHERE id=?`);
-
-  for (const e of entries) {
+  const setTotal = d.prepare(`UPDATE scans SET total=? WHERE id=?`);
+  const state = { count: 0, truncated: false };
+  for await (const e of walk(root, signal, state)) {
     signal.throwIfAborted();
-    const st = await fs.stat(e.abs);
+    const st = await fs.stat(e.abs).catch(() => null);
+    if (!st) continue; // 一覧づくりの間に消えたファイル
     const ext = path.extname(e.abs).slice(1).toLowerCase();
     const hash = await sha256(e.abs).catch(() => null);
-    const { lastInsertRowid } = insert.run(
-      scanId, e.rel, ext, kindOf(ext), st.size, st.mtime.toISOString(), hash, st.mtime < staleBefore ? 1 : 0,
-    );
-    const id = Number(lastInsertRowid);
-    if (hash && st.size > 0) {
-      const list = byHash.get(hash) ?? [];
-      list.push({ id, mtime: st.mtime.getTime(), rel: e.rel });
-      byHash.set(hash, list);
-    }
+    insert.run(scanId, e.rel, ext, kindOf(ext), st.size, st.mtime.toISOString(), hash, st.mtime < staleBefore ? 1 : 0);
+    if (state.count % 100 === 0) setTotal.run(state.count, scanId);
   }
 
-  // 同一内容のグループでは「更新日が最も古い → パスが短い」ものを原本とみなす
-  for (const list of byHash.values()) {
-    if (list.length < 2) continue;
-    list.sort((a, b) => a.mtime - b.mtime || a.rel.length - b.rel.length);
-    for (const dup of list.slice(1)) setDup.run(list[0].id, dup.id);
-  }
-  d.prepare(`UPDATE scans SET walked=1, total=?, truncated=? WHERE id=?`).run(entries.length, truncated ? 1 : 0, scanId);
+  // 同一内容のグループでは「更新日が最も古い → パスが短い」ものを原本とみなす（DB でまとめて判定する）
+  d.prepare(
+    `WITH ranked AS (
+       SELECT id,
+              ROW_NUMBER() OVER (PARTITION BY sha256 ORDER BY mtime, length(rel_path), id) AS rn,
+              FIRST_VALUE(id) OVER (PARTITION BY sha256 ORDER BY mtime, length(rel_path), id) AS rep
+         FROM files WHERE scan_id=? AND sha256 IS NOT NULL AND size > 0
+     )
+     UPDATE files SET dup_of = (SELECT rep FROM ranked WHERE ranked.id = files.id)
+      WHERE id IN (SELECT id FROM ranked WHERE rn > 1)`,
+  ).run(scanId);
+  const total = (d.prepare(`SELECT COUNT(*) AS n FROM files WHERE scan_id=?`).get(scanId) as { n: number }).n;
+  d.prepare(`UPDATE scans SET walked=1, total=?, truncated=? WHERE id=?`).run(total, state.truncated ? 1 : 0, scanId);
 }
 
 async function runScan(scanId: number, root: string, signal: AbortSignal) {
@@ -538,6 +539,12 @@ export function getScan(id: number): { scan: ScanRow; files: Omit<FileRow, "exce
       return rest;
     }),
   };
+}
+
+/** 棚卸しの記録だけを返す（ファイルの一覧は含めない）。棚卸しの最中に、進み具合を軽く取るため */
+export function getScanSummary(id: number): ScanRow | null {
+  const row = db().prepare(`SELECT * FROM scans WHERE id=?`).get(id) as ScanRow | undefined;
+  return row ? reconcile(row) : null;
 }
 
 export function getFile(scanId: number, fileId: number): FileRow | null {
