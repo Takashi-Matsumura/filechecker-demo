@@ -138,6 +138,8 @@ export interface AiJudgement {
   recommendation: "keep" | "restrict" | "archive" | "delete" | "review";
   reason: string;
   person_names: string[];
+  /** 本文に書かれた氏名の読み仮名・ローマ字表記（伏せる対象。件数には数えない） */
+  name_readings?: string[];
 }
 
 const JUDGE_SCHEMA = {
@@ -155,8 +157,9 @@ const JUDGE_SCHEMA = {
     recommendation: { type: "string", enum: ["keep", "restrict", "archive", "delete", "review"] },
     reason: { type: "string", maxLength: 60, description: "推奨アクションの理由を40字以内で" },
     person_names: { type: "array", items: { type: "string", maxLength: 20 }, maxItems: 20 },
+    name_readings: { type: "array", items: { type: "string", maxLength: 30 }, maxItems: 20 },
   },
-  required: ["summary", "category", "contains_personal_info", "contains_confidential", "risk", "recommendation", "reason", "person_names"],
+  required: ["summary", "category", "contains_personal_info", "contains_confidential", "risk", "recommendation", "reason", "person_names", "name_readings"],
 };
 
 export interface JudgeInput {
@@ -183,6 +186,7 @@ export async function judgeFile(input: JudgeInput, signal?: AbortSignal): Promis
 
 risk の基準: high=マイナンバー・カード番号・口座・身分証や大量の個人情報 / medium=少数の連絡先や機密表示 / low=軽微 / none=なし
 person_names には本文中に出てくる個人の氏名だけを入れる（会社名・部署名・〔会社名〕のような空欄は入れない）。無ければ空配列。
+name_readings には、本文中に書かれている氏名の読み仮名（フリガナ・ふりがな）やローマ字表記を、本文の表記どおりに入れる。本文に無い読みを推測で作らない。無ければ空配列。
 出力は改行やインデントを入れない1行の JSON にする。summary は60字以内、reason は40字以内で簡潔に。summary と reason には個人の氏名や連絡先を書かない（「顧客1名の申込書」のように一般化する）。
 見積金額や取引条件など通常の業務情報だけなら機密扱いにしない（「社外秘」等の明示や契約金額がある場合は機密）。
 本文に書かれていない事実を推測で補わないこと。`;

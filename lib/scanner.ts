@@ -7,6 +7,7 @@ import { db } from "./db";
 import {
   detect,
   findNameRanges,
+  findNameReadings,
   FINDING_LABELS,
   maskNameRanges,
   maskNames,
@@ -381,18 +382,23 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   }
 
   const names = (ai?.person_names ?? []).filter((n) => n.trim().length >= 2);
+  // 読み仮名（「ヤマダ タロウ」など）も伏せる。AI の結果に、書式から拾ったものを足す（件数には数えない）
+  const readings = [...new Set([...(ai?.name_readings ?? []), ...findNameReadings(text)])].filter((n) => n.trim().length >= 2);
+  const maskTargets = [...names, ...readings];
   // プレビューで同じ箇所を伏せ直せるよう、氏名の「位置」だけを残す（マスク後テキスト上の座標）
-  const nameRanges = findNameRanges(masked, names);
-  // 最終的なマスク（番号類 + AI が見つけた氏名）。サンプルと抜粋はここから作る
-  const final = redact(text, spans, names);
+  const nameRanges = findNameRanges(masked, maskTargets);
+  // 最終的なマスク（番号類 + 氏名 + 読み仮名）。サンプルと抜粋はここから作る
+  const final = redact(text, spans, maskTargets);
   const allFindings: Finding[] = findings.map((f) => ({ ...f, samples: final.samples.get(f.type) ?? [] }));
-  if (names.length > 0) {
+  // 件数は氏名で数える。読み仮名しか見つからなかったときは読み仮名で数える
+  const counted = names.length > 0 ? names : readings;
+  if (counted.length > 0) {
     allFindings.push({
       type: "person_name",
       label: FINDING_LABELS.person_name,
-      level: names.length >= 5 ? "medium" : "low",
-      count: names.length,
-      samples: names.slice(0, 3).map((n) => `【${maskNames(n, [n])}】`),
+      level: counted.length >= 5 ? "medium" : "low",
+      count: counted.length,
+      samples: counted.slice(0, 3).map((n) => `【${maskNames(n, [n])}】`),
     });
   }
   level = maxLevel(level, ruleLevel(allFindings));
@@ -404,7 +410,13 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   const ocrPreview: OcrPreview | null =
     method === "ocr" ? { text: final.text, marks: buildMarks(final.placed, allFindings, nameRanges) } : null;
   const aiStored: Partial<AiJudgement> = ai
-    ? { ...ai, summary: maskNames(ai.summary, names), reason: maskNames(ai.reason, names), person_names: undefined }
+    ? {
+        ...ai,
+        summary: maskNames(ai.summary, maskTargets),
+        reason: maskNames(ai.reason, maskTargets),
+        person_names: undefined,
+        name_readings: undefined,
+      }
     : { recommendation: FALLBACK_REC[risk], reason: "AI 判定が使えなかったため、ルール検出の結果から推定", summary: "", category: "その他", risk };
   // 同一内容のファイルが先にある場合は、AI の判断に関わらず重複として削除候補にする
   if (row.dup_of !== null) {
@@ -680,8 +692,11 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
 
   // 氏名が見つかったファイルは、スキャン時に残した位置で伏せ直す。伏せられる保証がなければ表示しない
   const person = (JSON.parse(row.findings) as Finding[]).find((f) => f.type === "person_name");
-  const ranges = person ? parseNameRanges(row.nameRanges) : [];
-  if (person && !ranges) {
+  const savedRanges = parseNameRanges(row.nameRanges);
+  // 氏名か読み仮名の位置があれば、伏せる必要がある
+  const needsNames = !!person || (savedRanges?.length ?? 0) > 0;
+  const ranges = needsNames ? savedRanges : [];
+  if (needsNames && !ranges) {
     return { available: false, reason: "氏名を伏せるための情報がない以前の棚卸しのため、保存済みの抜粋を表示しています。もう一度棚卸しするとプレビューできます" };
   }
 
@@ -694,7 +709,7 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
   if (buf === "too_large") return { available: false, reason: "サイズが大きいためプレビューできません" };
 
   const changed = row.sha256 === null || crypto.createHash("sha256").update(buf).digest("hex") !== row.sha256;
-  if (person && changed) {
+  if (needsNames && changed) {
     return { available: false, reason: "棚卸しのあとに内容が変わり、氏名を確実に伏せられないため、保存済みの抜粋を表示しています" };
   }
   const r = await extract(buf, row.ext, undefined, { allowOcr: false });
