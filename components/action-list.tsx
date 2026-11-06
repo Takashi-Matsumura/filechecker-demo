@@ -10,6 +10,7 @@ import {
   folderOf,
   priority,
   reasonTags,
+  unreadReason,
   type Bucket,
   type FileItem,
   type ScanData,
@@ -50,7 +51,8 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
       number
     >;
     const okCount = data.files.filter((f) => f.status === "done" && bucketOf(f) === "ok").length;
-    return { actionable, todo, handled, top, rest, counts, okCount };
+    const unreadCount = todo.filter((x) => unreadReason(x.f) !== null).length;
+    return { actionable, todo, handled, top, rest, counts, okCount, unreadCount };
   }, [data]);
 
   const tableRows = filter === "all" ? view.rest : filter === "handled" ? view.handled : view.rest.filter((x) => x.bucket === filter);
@@ -104,6 +106,12 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
             >
               {pct > 0 && <div className="aqua-progress-bar" style={{ width: `${pct}%` }} />}
             </div>
+            {view.unreadCount > 0 && (
+              <p className="mt-3 rounded-lg bg-stone-100 px-3 py-2 text-xs text-stone-700">
+                このうち <span className="font-semibold tabular-nums">{view.unreadCount}</span>
+                件は、形式が未対応・大きすぎる・読み込みに失敗したなどの理由で、中身を確認できなかったファイルです（「中身未確認」「読み込みエラー」のタグ）。開いて中身を確かめてください。
+              </p>
+            )}
 
             {view.top.length > 0 && (
               <div className="mt-5 space-y-2">

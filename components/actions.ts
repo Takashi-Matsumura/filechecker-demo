@@ -76,8 +76,22 @@ export const BUCKETS: Record<Exclude<Bucket, "ok">, { verb: string; hint: string
 
 export const BUCKET_ORDER: Exclude<Bucket, "ok">[] = ["move", "remove", "tidy", "check"];
 
+/**
+ * 中身を確認できなかった理由。確認できていれば null。
+ * 読み込みに失敗したファイルと、形式が未対応・大きすぎるなどで中身を読まなかったファイル。
+ */
+export function unreadReason(f: FileItem): string | null {
+  if (f.status === "error") return "読み込みエラー";
+  if (f.status === "done" && (f.extract_method === "none" || f.extract_method === null)) return "中身未確認";
+  return null;
+}
+
 export function bucketOf(f: FileItem): Bucket {
-  if (f.status !== "done") return "ok"; // 解析中・エラーはやることに含めない
+  // 読み込みに失敗したファイルは、中身に何があるか分からないので人に確かめてもらう
+  if (f.status === "error") return "check";
+  if (f.status !== "done") return "ok"; // 解析中はやることに含めない
+  // 中身を読めなかったファイルは「問題なし」にしない（名前や日付だけでは安全と言えないため）
+  const unread = unreadReason(f) !== null;
   switch (f.ai?.recommendation) {
     case "restrict":
       return "move";
@@ -88,14 +102,14 @@ export function bucketOf(f: FileItem): Bucket {
     case "review":
       return "check";
     case "keep":
-      return "ok";
+      return unread ? "check" : "ok";
   }
   // AI の判定が無い場合はルールの結果から決める
   if (f.dup_of !== null) return "remove";
   if (f.risk === "high") return "move";
   if (f.risk === "medium") return "check";
   if (f.is_stale) return "tidy";
-  return "ok";
+  return unread ? "check" : "ok";
 }
 
 const LEVEL_RANK: Record<Level, number> = { high: 3, medium: 2, low: 1, none: 0 };
@@ -113,6 +127,9 @@ export function reasonTags(f: FileItem): string[] {
   if (top) tags.push(`${top.label} ${top.count}件`);
   else if (f.findings.some((x) => x.type === "person_name")) tags.push("氏名あり");
   if (f.is_stale) tags.push(`${new Date(f.mtime).getFullYear()}年から更新なし`);
+  // 中身を確認できなかったことは必ず見せる（ほかに理由がなければ、これが区分の理由になる）
+  const unread = unreadReason(f);
+  if (unread) tags.push(unread);
   return tags.length > 0 ? tags : [f.ai?.category ?? "要確認"];
 }
 
