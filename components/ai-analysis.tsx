@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AiStats, CallSummary, Counts, FeedbackSummary } from "@/lib/metrics";
+import type { AiStats, CallSummary, Counts, FeedbackSummary, JudgeVersion } from "@/lib/metrics";
 import { BUCKET_ORDER, BUCKETS } from "./actions";
 import { BackLink } from "./back-link";
 import { RECOMMENDATION, RISK, type Level } from "./labels";
 
 type Period = "all" | "30" | "7";
+type StatsResponse = AiStats & { versions: JudgeVersion[]; currentVersion: string };
 
 const PERIODS: { key: Period; label: string }[] = [
   { key: "all", label: "すべて" },
@@ -33,18 +34,22 @@ const date = (iso: string | null) => (iso ? new Date(iso).toLocaleString("ja-JP"
  */
 export function AiAnalysis() {
   const [period, setPeriod] = useState<Period>("all");
-  const [stats, setStats] = useState<AiStats | null>(null);
+  // 判定の指示文の版（空 = すべて）
+  const [version, setVersion] = useState("");
+  const [stats, setStats] = useState<StatsResponse | null>(null);
 
   useEffect(() => {
     let stop = false;
-    fetch(`/api/ai-stats?days=${period}`)
-      .then((r) => (r.ok ? (r.json() as Promise<AiStats>) : null))
+    const params = new URLSearchParams({ days: period });
+    if (version) params.set("version", version);
+    fetch(`/api/ai-stats?${params}`)
+      .then((r) => (r.ok ? (r.json() as Promise<StatsResponse>) : null))
       .then((s) => !stop && s && setStats(s))
       .catch(() => {});
     return () => {
       stop = true;
     };
-  }, [period]);
+  }, [period, version]);
 
   return (
     <div className="space-y-8">
@@ -58,22 +63,46 @@ export function AiAnalysis() {
             </p>
           </div>
         </div>
-        <div className="flex gap-1.5" role="group" aria-label="期間">
-          {PERIODS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => setPeriod(p.key)}
-              aria-pressed={period === p.key}
-              className={`rounded-full px-3 py-1 text-xs ring-1 ${
-                period === p.key ? "bg-stone-900 font-semibold text-white ring-stone-900" : "bg-white text-stone-700 ring-stone-200 hover:bg-stone-50"
-              }`}
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-stone-600">
+            判定の指示文の版
+            <select
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+              className="rounded-md border border-stone-300 bg-white px-2 py-1 font-mono text-xs text-stone-800 focus:border-teal-600 focus:outline-none"
             >
-              {p.label}
-            </button>
-          ))}
+              <option value="">すべて</option>
+              {stats?.versions.map((v) => (
+                <option key={v.version} value={v.version}>
+                  {v.version}
+                  {v.version === stats.currentVersion ? "（現在）" : ""}　{date(v.firstAt)}〜{date(v.lastAt)}・{v.calls}回
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex gap-1.5" role="group" aria-label="期間">
+            {PERIODS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => setPeriod(p.key)}
+                aria-pressed={period === p.key}
+                className={`rounded-full px-3 py-1 text-xs ring-1 ${
+                  period === p.key ? "bg-stone-900 font-semibold text-white ring-stone-900" : "bg-white text-stone-700 ring-stone-200 hover:bg-stone-50"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+      {version && stats && (
+        <p className="-mt-4 rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-900 ring-1 ring-teal-200">
+          判定の指示文の版 <span className="font-mono font-semibold">{version}</span>
+          {version === stats.currentVersion ? "（現在の版）" : ""} で処理した記録だけを表示しています。文字の読み取りと氏名の補完は、この版で判定したファイルの処理だけを数えています。
+        </p>
+      )}
 
       {!stats ? (
         <p className="text-sm text-stone-400">読み込み中…</p>
