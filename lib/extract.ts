@@ -139,15 +139,32 @@ function extractOffice(buf: Buffer, ext: string): string {
         const inner = c[2] ?? "";
         const t = attrs.match(/\bt="(\w+)"/)?.[1];
         const v = inner.match(/<v>([^<]*)<\/v>/)?.[1];
-        if (t === "s" && v !== undefined) cells.push(shared[Number(v)] ?? "");
-        else if (t === "inlineStr") cells.push([...inner.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1])).join(""));
-        else if (v !== undefined) cells.push(decodeXml(v));
+        let value: string | undefined;
+        if (t === "s" && v !== undefined) value = shared[Number(v)] ?? "";
+        else if (t === "inlineStr") value = [...inner.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1])).join("");
+        else if (v !== undefined) value = decodeXml(v);
+        if (value === undefined) continue;
+        // セルの位置（C5 の「C」）どおりに並べる。空のセルを詰めると、行ごとに列がずれて
+        // 「氏名」列などを正しく読めなくなるため
+        const col = columnIndex(attrs.match(/\br="([A-Z]+)\d+"/)?.[1]);
+        if (col !== null && col > cells.length && col < MAX_COLUMNS) while (cells.length < col) cells.push("");
+        cells.push(value);
       }
       if (cells.some((x) => x.trim())) lines.push(cells.join("\t"));
     }
   }
   return lines.join("\n");
 }
+
+/** 列の記号（A, B, …, AA）を 0 始まりの番号にする */
+function columnIndex(letters: string | undefined): number | null {
+  if (!letters || letters.length > 3) return null;
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+/** 空のセルを埋める列の上限（極端に右の列にあるセルで、空の列を大量に作らないため） */
+const MAX_COLUMNS = 200;
 
 // ---------------------------------------------------------------- 画像の正規化
 
