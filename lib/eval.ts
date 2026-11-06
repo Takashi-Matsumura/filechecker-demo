@@ -21,6 +21,8 @@ interface Expected {
   risk?: Level[];
   recommendation?: string[];
   ocr?: string[];
+  /** 伏せられるべき番号（ファイルに書かれた表記のまま） */
+  secrets?: string[];
   skip_ai?: boolean;
 }
 
@@ -76,10 +78,13 @@ export async function runEval(root: string, dataset: Dataset = "sample", log: (l
     risk: { ok: 0, total: 0, under: 0 },
     recommendation: { ok: 0, total: 0 },
     leaks: { leaked: 0, total: 0 },
+    secretLeaks: { leaked: 0, total: 0 },
     ocr: { found: 0, total: 0 },
     aiFailures: 0,
     files: [],
   };
+  // 古い記録との互換のため EvalMetrics では省略可能にしているが、評価では必ず数える
+  const secretLeaks = (m.secretLeaks = { leaked: 0, total: 0 });
   const t0 = performance.now();
   const entries = Object.entries(expected).filter(([, e]) => !e.skip_ai);
   for (const [i, [rel, e]] of entries.entries()) {
@@ -148,6 +153,11 @@ export async function runEval(root: string, dataset: Dataset = "sample", log: (l
     const leaked = truthNames.filter((n) => containsLoose(masked, n)).length;
     m.leaks.leaked += leaked;
     m.leaks.total += truthNames.length;
+    // 伏せられるべき番号（電話番号など）が、伏せたあとの本文に残っていないか（半角・全角の違いは無視して照合）
+    const secrets = (e.secrets ?? []).filter((x) => containsLoose(r.text, x));
+    const secretsLeaked = secrets.filter((x) => containsLoose(masked, x)).length;
+    secretLeaks.leaked += secretsLeaked;
+    secretLeaks.total += secrets.length;
 
     // リスクと推奨
     let riskOk: boolean | null = null;
@@ -183,6 +193,7 @@ export async function runEval(root: string, dataset: Dataset = "sample", log: (l
       recommendation: ai?.recommendation ?? null,
       recommendationOk: recOk,
       leaked,
+      secretsLeaked,
       ocr,
       error,
     });
@@ -190,6 +201,7 @@ export async function runEval(root: string, dataset: Dataset = "sample", log: (l
       `[${i + 1}/${entries.length}] ${rel}  氏名 ${names.tp}/${names.tp + names.fn}` +
         `${names.fp ? ` (誤り${names.fp})` : ""}  リスク ${ai?.risk ?? "-"}${riskOk === false ? " ✗" : ""}` +
         `  推奨 ${ai?.recommendation ?? "-"}${recOk === false ? " ✗" : ""}${leaked ? `  伏せ漏れ ${leaked}` : ""}` +
+        `${secretsLeaked ? `  番号の伏せ漏れ ${secretsLeaked}` : ""}` +
         `${ocr ? `  読み取り ${ocr.found}/${ocr.total}` : ""}${error ? `  エラー: ${error}` : ""}`,
     );
   }

@@ -357,7 +357,7 @@ function Evals({ stats, scanned }: { stats: AiStats; scanned: boolean }) {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1140px] text-sm">
+          <table className="w-full min-w-[1240px] text-sm">
             <thead className="border-b border-stone-200 text-left text-xs text-stone-500">
               <tr className="whitespace-nowrap">
                 <th className="py-2 pr-3 font-medium">日時</th>
@@ -368,7 +368,8 @@ function Evals({ stats, scanned }: { stats: AiStats; scanned: boolean }) {
                 <th className="py-2 pr-3 text-right font-medium">読み仮名</th>
                 <th className="py-2 pr-3 text-right font-medium">リスク一致</th>
                 <th className="py-2 pr-3 text-right font-medium">推奨一致</th>
-                <th className="py-2 pr-3 text-right font-medium">伏せ漏れ</th>
+                <th className="py-2 pr-3 text-right font-medium">氏名の伏せ漏れ</th>
+                <th className="py-2 pr-3 text-right font-medium">番号の伏せ漏れ</th>
                 <th className="py-2 pr-3 text-right font-medium">読み取り</th>
                 <th className="py-2 pr-3 text-right font-medium">ルール検出</th>
                 <th className="py-2 text-right font-medium">時間</th>
@@ -404,6 +405,11 @@ function Evals({ stats, scanned }: { stats: AiStats; scanned: boolean }) {
                     <td className="py-2 pr-3 text-right tabular-nums">{pct(m.recommendation.ok, m.recommendation.total)}</td>
                     <td className={`py-2 pr-3 text-right tabular-nums ${m.leaks.leaked ? "font-semibold text-red-700" : ""}`}>
                       {m.leaks.leaked} / {m.leaks.total}
+                    </td>
+                    <td
+                      className={`py-2 pr-3 text-right tabular-nums ${m.secretLeaks?.leaked ? "font-semibold text-red-700" : ""}`}
+                    >
+                      {m.secretLeaks && m.secretLeaks.total > 0 ? `${m.secretLeaks.leaked} / ${m.secretLeaks.total}` : "—"}
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums">{pct(m.ocr.found, m.ocr.total)}</td>
                     <td className="py-2 pr-3 text-right">
