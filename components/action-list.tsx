@@ -136,7 +136,9 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
             </Chip>
             {BUCKET_ORDER.filter((b) => view.counts[b] > 0 || filter === b).map((b) => (
               <Chip key={b} active={filter === b} onClick={() => setFilter(b)}>
-                <span className={`h-2 w-2 rounded-full ${BUCKETS[b].dot}`} aria-hidden />
+                <span className={filter === b ? "" : BUCKETS[b].text}>
+                  <BucketIcon bucket={b} />
+                </span>
                 {BUCKETS[b].verb} <span className="tabular-nums">{view.counts[b]}</span>
               </Chip>
             ))}
@@ -286,7 +288,7 @@ function Row({ f, bucket, ...ctx }: Entry & Ctx) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center gap-1 text-xs font-bold ${b.text}`}>
-              <span className={`h-2 w-2 rounded-full ${b.dot}`} aria-hidden />
+              <BucketIcon bucket={bucket} />
               {b.verb}
             </span>
             <span className="truncate font-medium">{fileName(f.rel_path)}</span>
@@ -363,7 +365,7 @@ function TableRow({ f, bucket, ...ctx }: Entry & Ctx) {
         </td>
         <td className={`whitespace-nowrap px-2 py-1.5 ${handled ? "opacity-50" : ""}`}>
           <span className={`inline-flex items-center gap-1 text-xs font-bold ${b.text}`}>
-            <span className={`h-2 w-2 rounded-full ${b.dot}`} aria-hidden />
+            <BucketIcon bucket={bucket} />
             {b.verb}
           </span>
         </td>
@@ -419,6 +421,26 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * 区分のアイコン。色だけに頼らず形でも見分けられるようにする
+ * （移す＝矢印 / 消す＝ゴミ箱 / 整理する＝箱 / 確認する＝？）。色は親の文字色を使う。
+ */
+function BucketIcon({ bucket }: { bucket: Exclude<Bucket, "ok"> }) {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {bucket === "move" && <path d="M4 12h14M13 6l6 6-6 6" />}
+      {bucket === "remove" && <path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5" />}
+      {bucket === "tidy" && <path d="M3.5 4.5h17v4h-17zM5 8.5v11h14v-11M10 12.5h4" />}
+      {bucket === "check" && (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.4M12 17h.01" />
+        </>
+      )}
+    </svg>
   );
 }
 

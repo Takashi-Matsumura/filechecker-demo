@@ -11,7 +11,7 @@ export const RISK_ORDER: Record<Level, number> = { high: 3, medium: 2, low: 1, n
 
 export const RECOMMENDATION: Record<string, { label: string; hint: string; className: string }> = {
   restrict: { label: "アクセス制限", hint: "保護された場所へ移す", className: "text-red-700" },
-  delete: { label: "削除を検討", hint: "目的を終えた可能性", className: "text-orange-700" },
+  delete: { label: "削除を検討", hint: "目的を終えた可能性", className: "text-violet-700" },
   archive: { label: "アーカイブ", hint: "古い資料として退避", className: "text-sky-700" },
   review: { label: "要確認", hint: "人の判断が必要", className: "text-amber-700" },
   keep: { label: "そのまま", hint: "問題なし", className: "text-stone-500" },
