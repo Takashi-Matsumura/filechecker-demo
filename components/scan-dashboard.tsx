@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import type { FileItem, ScanData } from "./actions";
-import { formatDate, METHOD, RECOMMENDATION, RISK, RISK_ORDER, type Level } from "./labels";
+import { useEffect, useState } from "react";
+import type { AnalysisView } from "@/lib/views";
+import { formatDate, METHOD, RECOMMENDATION, RISK, type Level } from "./labels";
+import { Pager } from "./pager";
 
 type Filter = "all" | "high" | "medium" | "personal" | "dup" | "stale" | "issue";
 
@@ -17,72 +18,52 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "issue", label: "未対応・エラー" },
 ];
 
-const hasPersonal = (f: FileItem) => f.findings.some((x) => x.type !== "confidential");
+/** サーバ（lib/views.ts の PAGE_SIZE）と同じ */
+const PAGE_SIZE = 50;
 
-function matches(f: FileItem, filter: Filter): boolean {
-  switch (filter) {
-    case "all":
-      return true;
-    case "high":
-      return f.risk === "high";
-    case "medium":
-      return f.risk === "medium";
-    case "personal":
-      return hasPersonal(f);
-    case "dup":
-      return f.dup_of !== null;
-    case "stale":
-      return f.is_stale;
-    case "issue":
-      return f.status === "error" || f.extract_method === "none";
-  }
-}
-
-/** 詳しい分析（集計とファイル一覧）。データの取得は親の ScanView が行う */
-export function ScanAnalysis({ data }: { data: ScanData }) {
-  const [filter, setFilter] = useState<Filter>("all");
+/**
+ * 詳しい分析（集計とファイル一覧）。
+ * 集計・絞り込み・検索・並べ替えはサーバ（/api/scans/[id]/analysis）で行い、1ページ分だけを受け取る。
+ */
+export function ScanAnalysis({ scanId, refreshKey }: { scanId: number; refreshKey: number }) {
+  const [filter, setFilterState] = useState<Filter>("all");
   const [q, setQ] = useState("");
+  // 入力のたびに問い合わせないよう、打ち終わってから検索する
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [view, setView] = useState<AnalysisView | null>(null);
 
-  const stats = useMemo(() => {
-    const files = data?.files ?? [];
-    const done = files.filter((f) => f.status !== "pending");
-    const byType = new Map<string, { label: string; files: number; count: number }>();
-    for (const f of done) {
-      for (const x of f.findings) {
-        const cur = byType.get(x.type) ?? { label: x.label, files: 0, count: 0 };
-        cur.files++;
-        cur.count += x.count;
-        byType.set(x.type, cur);
-      }
-    }
-    const byRec = new Map<string, number>();
-    for (const f of done) {
-      const r = f.ai?.recommendation;
-      if (r) byRec.set(r, (byRec.get(r) ?? 0) + 1);
-    }
-    return {
-      total: files.length,
-      high: done.filter((f) => f.risk === "high").length,
-      medium: done.filter((f) => f.risk === "medium").length,
-      personal: done.filter(hasPersonal).length,
-      dup: files.filter((f) => f.dup_of !== null).length,
-      stale: files.filter((f) => f.is_stale).length,
-      ocr: done.filter((f) => f.extract_method === "ocr").length,
-      byType: [...byType.values()].sort((a, b) => b.files - a.files),
-      byRec,
+  const setFilter = (f: Filter) => {
+    setFilterState(f);
+    setPage(0);
+  };
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setQuery(q.trim());
+      setPage(0);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => {
+    let stop = false;
+    const params = new URLSearchParams({ filter, q: query, page: String(page) });
+    fetch(`/api/scans/${scanId}/analysis?${params}`)
+      .then((r) => (r.ok ? (r.json() as Promise<AnalysisView>) : null))
+      .then((v) => {
+        if (stop || !v) return;
+        setView(v);
+        if (v.page !== page) setPage(v.page);
+      })
+      .catch(() => {});
+    return () => {
+      stop = true;
     };
-  }, [data]);
+  }, [scanId, filter, query, page, refreshKey]);
 
-  const rows = useMemo(() => {
-    const files = data?.files ?? [];
-    const needle = q.trim().toLowerCase();
-    return files
-      .filter((f) => matches(f, filter))
-      .filter((f) => !needle || f.rel_path.toLowerCase().includes(needle) || f.ai?.summary?.toLowerCase().includes(needle))
-      .sort((a, b) => RISK_ORDER[b.risk] - RISK_ORDER[a.risk] || a.rel_path.localeCompare(b.rel_path, "ja"));
-  }, [data, filter, q]);
-
-  const { scan } = data;
+  if (!view) return <p className="text-sm text-stone-400">読み込み中…</p>;
+  const { stats, rows } = view;
   const maxTypeFiles = Math.max(1, ...stats.byType.map((t) => t.files));
 
   return (
@@ -128,7 +109,7 @@ export function ScanAnalysis({ data }: { data: ScanData }) {
                   <span className={`font-medium ${r.className}`}>{r.label}</span>
                   <span className="ml-2 text-xs text-stone-400">{r.hint}</span>
                 </span>
-                <span className="tabular-nums text-stone-600">{stats.byRec.get(key) ?? 0}</span>
+                <span className="tabular-nums text-stone-600">{(stats.byRec[key] ?? 0).toLocaleString()}</span>
               </li>
             ))}
           </ul>
@@ -186,7 +167,7 @@ export function ScanAnalysis({ data }: { data: ScanData }) {
                     )}
                   </td>
                   <td className="max-w-md px-4 py-3">
-                    <Link href={`/scans/${scan.id}/files/${f.id}`} className="font-medium text-stone-900 hover:text-teal-700 hover:underline">
+                    <Link href={`/scans/${scanId}/files/${f.id}`} className="font-medium text-stone-900 hover:text-teal-700 hover:underline">
                       {f.rel_path.split("/").pop()}
                     </Link>
                     <div className="truncate text-xs text-stone-400">{f.rel_path}</div>
@@ -230,6 +211,7 @@ export function ScanAnalysis({ data }: { data: ScanData }) {
             </tbody>
           </table>
         </div>
+        <Pager page={view.page} pages={view.pages} count={view.count} pageSize={PAGE_SIZE} onPage={setPage} />
       </section>
     </div>
   );
@@ -245,7 +227,7 @@ function Stat({ label, value, tone, onClick }: { label: string; value: number; t
       className="rounded-xl border border-stone-200 bg-white p-4 text-left transition enabled:hover:border-stone-300 enabled:hover:shadow-sm"
     >
       <div className="text-xs text-stone-500">{label}</div>
-      <div className={`mt-1 text-2xl font-bold tabular-nums ${color}`}>{value}</div>
+      <div className={`mt-1 text-2xl font-bold tabular-nums ${color}`}>{value.toLocaleString()}</div>
     </button>
   );
 }

@@ -524,21 +524,24 @@ export function listScans(): ScanRow[] {
   return (db().prepare(`SELECT * FROM scans ORDER BY id DESC LIMIT 50`).all() as unknown as ScanRow[]).map(reconcile);
 }
 
+/** 一覧に必要な列だけ（OCR の全文・氏名の位置・抜粋など、重い列や一覧で使わない列は読まない） */
+const LIST_COLUMNS = `id, scan_id, rel_path, ext, kind, size, mtime, status, error, extract_method, text_chars,
+  findings_json, rule_level, ai_json, risk, is_stale, dup_of, action_status, action_at`;
+
+/** 棚卸しのファイル一覧（画面の集計・表示用） */
+export function listFileItems(scanId: number): Omit<FileRow, "excerpt">[] {
+  const rows = db().prepare(`SELECT ${LIST_COLUMNS} FROM files WHERE scan_id=? ORDER BY id`).all(scanId) as Record<string, unknown>[];
+  return rows.map((r) => {
+    const { excerpt: _excerpt, ...rest } = toFile(r);
+    void _excerpt;
+    return rest;
+  });
+}
+
 export function getScan(id: number): { scan: ScanRow; files: Omit<FileRow, "excerpt">[] } | null {
   const row = db().prepare(`SELECT * FROM scans WHERE id=?`).get(id) as ScanRow | undefined;
   if (!row) return null;
-  const scan = reconcile(row);
-  const rows = db()
-    .prepare(`SELECT * FROM files WHERE scan_id=? ORDER BY id`)
-    .all(id) as Record<string, unknown>[];
-  return {
-    scan,
-    files: rows.map((r) => {
-      const { excerpt: _excerpt, ...rest } = toFile(r);
-      void _excerpt;
-      return rest;
-    }),
-  };
+  return { scan: reconcile(row), files: listFileItems(id) };
 }
 
 /** 棚卸しの記録だけを返す（ファイルの一覧は含めない）。棚卸しの最中に、進み具合を軽く取るため */

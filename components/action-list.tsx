@@ -1,74 +1,94 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import {
-  BUCKET_ORDER,
-  BUCKETS,
-  bucketOf,
-  fileName,
-  folderOf,
-  priority,
-  reasonTags,
-  unreadReason,
-  type Bucket,
-  type FileItem,
-  type ScanData,
-} from "./actions";
+import { useCallback, useEffect, useState } from "react";
+import type { ActionsView } from "@/lib/views";
+import { BUCKET_ORDER, BUCKETS, fileName, folderOf, reasonTags, type Bucket, type FileItem, type ScanData } from "./actions";
+import { Pager } from "./pager";
 
 type Status = FileItem["action_status"];
 
+/** サーバ（lib/views.ts の PAGE_SIZE）と同じ。ページの件数表示に使う */
+const PAGE_SIZE = 50;
+
 interface Props {
-  data: ScanData;
-  onStatus: (fileId: number, status: Status) => void;
+  scanId: number;
+  root: string;
+  platform: NonNullable<ScanData["platform"]>;
+  /** 値が変わったら取り直す（解析中の定期更新・解析の完了時） */
+  refreshKey: number;
   /** 解析が終わっていない（実行中または中断中） */
   incomplete: boolean;
   paused: boolean;
 }
 
-/** 「次に何をすればいいか」だけを見せる画面 */
-export function ActionList({ data, onStatus, incomplete, paused }: Props) {
-  const [filter, setFilter] = useState<Filter>("all");
+/** 押した直後に、その行の対応状況を画面上で切り替える（保存後に取り直すまでの間） */
+function withStatus(v: ActionsView, fileId: number, status: Status): ActionsView {
+  const map = (e: Entry) => (e.f.id === fileId ? { ...e, f: { ...e.f, action_status: status } } : e);
+  return { ...v, top: v.top.map(map), rows: v.rows.map(map) };
+}
+
+/**
+ * 「次に何をすればいいか」だけを見せる画面。
+ * 集計と表の1ページ分をサーバ（/api/scans/[id]/actions）から受け取るので、ファイルが多くても重くならない。
+ */
+export function ActionList({ scanId, root, platform, refreshKey, incomplete, paused }: Props) {
+  const [filter, setFilterState] = useState<Filter>("all");
+  const [page, setPage] = useState(0);
+  const [view, setView] = useState<ActionsView | null>(null);
+  // 対応状況を変えたあとに取り直すためのキー
+  const [rev, setRev] = useState(0);
   const [toast, setToast] = useState<{ id: number; msg: string; undo?: () => void } | null>(null);
 
-  const view = useMemo(() => {
-    const actionable = data.files
-      .map((f) => ({ f, bucket: bucketOf(f) }))
-      .filter((x): x is Entry => x.bucket !== "ok");
-    const todo = actionable.filter((x) => x.f.action_status === "todo").sort((a, b) => priority(b.f) - priority(a.f));
-    // 新しく対応したものが上に来るように
-    const handled = actionable
-      .filter((x) => x.f.action_status !== "todo")
-      .sort((a, b) => (b.f.action_at ?? "").localeCompare(a.f.action_at ?? ""));
-    const top = todo.slice(0, 3);
-    const topIds = new Set(top.map((x) => x.f.id));
-    // 表は区分ごとにまとめ、区分の中は優先度順
-    const rest = todo
-      .filter((x) => !topIds.has(x.f.id))
-      .sort((a, b) => BUCKET_ORDER.indexOf(a.bucket) - BUCKET_ORDER.indexOf(b.bucket) || priority(b.f) - priority(a.f));
-    const counts = Object.fromEntries(BUCKET_ORDER.map((b) => [b, rest.filter((x) => x.bucket === b).length])) as Record<
-      Exclude<Bucket, "ok">,
-      number
-    >;
-    const okCount = data.files.filter((f) => f.status === "done" && bucketOf(f) === "ok").length;
-    const unreadCount = todo.filter((x) => unreadReason(x.f) !== null).length;
-    return { actionable, todo, handled, top, rest, counts, okCount, unreadCount };
-  }, [data]);
+  const setFilter = (f: Filter) => {
+    setFilterState(f);
+    setPage(0);
+  };
 
-  const tableRows = filter === "all" ? view.rest : filter === "handled" ? view.handled : view.rest.filter((x) => x.bucket === filter);
+  useEffect(() => {
+    let stop = false;
+    fetch(`/api/scans/${scanId}/actions?filter=${filter}&page=${page}`)
+      .then((r) => (r.ok ? (r.json() as Promise<ActionsView>) : null))
+      .then((v) => {
+        if (stop || !v) return;
+        setView(v);
+        // 対応して件数が減り、今のページが無くなったときは、サーバが返したページに合わせる
+        if (v.page !== page) setPage(v.page);
+      })
+      .catch(() => {});
+    return () => {
+      stop = true;
+    };
+  }, [scanId, filter, page, refreshKey, rev]);
 
   // 「元に戻す」付きの通知は長めに表示する
-  const notify: Notify = (msg, undo) => {
+  const notify: Notify = useCallback((msg, undo) => {
     const id = Date.now() + Math.random();
     setToast({ id, msg, undo });
     setTimeout(() => setToast((cur) => (cur?.id === id ? null : cur)), undo ? 6000 : 2500);
-  };
-  const platform = data.platform ?? { os: "mac" as const, revealLabel: "Finderで表示", sep: "/" };
+  }, []);
 
-  const total = view.actionable.length;
-  const doneCount = view.handled.length;
+  // 押した瞬間に画面へ反映し、保存したら最新を取り直す
+  const onStatus = useCallback(
+    async (fileId: number, status: Status) => {
+      setView((v) => v && withStatus(v, fileId, status));
+      const res = await fetch(`/api/scans/${scanId}/files/${fileId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      }).catch(() => null);
+      if (!res?.ok) notify("保存できませんでした。もう一度お試しください");
+      setRev((r) => r + 1);
+    },
+    [scanId, notify],
+  );
+
+  if (!view) return <p className="text-sm text-stone-400">読み込み中…</p>;
+
+  const total = view.total;
+  const doneCount = view.handledCount;
   const pct = total ? Math.round((doneCount / total) * 100) : 0;
-  const allDone = !incomplete && total > 0 && view.todo.length === 0;
+  const allDone = !incomplete && total > 0 && view.todoCount === 0;
 
   return (
     <div className="space-y-6">
@@ -90,10 +110,10 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
           <>
             <div className="flex items-baseline justify-between">
               <p className="text-lg font-bold">
-                やること <span className="tabular-nums">{view.todo.length}</span>件
+                やること <span className="tabular-nums">{view.todoCount.toLocaleString()}</span>件
               </p>
               <p className="text-xs tabular-nums text-stone-500">
-                {doneCount} / {total} 完了
+                {doneCount.toLocaleString()} / {total.toLocaleString()} 完了
               </p>
             </div>
             <div
@@ -125,7 +145,7 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
                 </div>
                 <ul className="overflow-hidden rounded-lg border border-stone-200">
                   {view.top.map(({ f, bucket }) => (
-                    <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} platform={platform} onStatus={onStatus} notify={notify} />
+                    <Row key={f.id} f={f} bucket={bucket} scanId={scanId} root={root} platform={platform} onStatus={onStatus} notify={notify} />
                   ))}
                 </ul>
               </div>
@@ -135,24 +155,24 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
       </section>
 
       {/* 残り（区分・対応済みをフィルタで切り替える表） */}
-      {(view.rest.length > 0 || view.handled.length > 0) && (
+      {(view.restCount > 0 || view.handledCount > 0) && (
         <section className="space-y-2">
           <h2 className="text-sm font-bold">残りのやること</h2>
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="表示の絞り込み">
             <Chip active={filter === "all"} onClick={() => setFilter("all")}>
-              すべて <span className="tabular-nums">{view.rest.length}</span>
+              すべて <span className="tabular-nums">{view.restCount.toLocaleString()}</span>
             </Chip>
             {BUCKET_ORDER.filter((b) => view.counts[b] > 0 || filter === b).map((b) => (
               <Chip key={b} active={filter === b} onClick={() => setFilter(b)}>
                 <span className={filter === b ? "" : BUCKETS[b].text}>
                   <BucketIcon bucket={b} />
                 </span>
-                {BUCKETS[b].verb} <span className="tabular-nums">{view.counts[b]}</span>
+                {BUCKETS[b].verb} <span className="tabular-nums">{view.counts[b].toLocaleString()}</span>
               </Chip>
             ))}
-            {(view.handled.length > 0 || filter === "handled") && (
+            {(view.handledCount > 0 || filter === "handled") && (
               <Chip active={filter === "handled"} onClick={() => setFilter("handled")}>
-                対応済み・対応しない <span className="tabular-nums">{view.handled.length}</span>
+                対応済み・対応しない <span className="tabular-nums">{view.handledCount.toLocaleString()}</span>
               </Chip>
             )}
           </div>
@@ -164,14 +184,15 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
                 : BUCKETS[filter].hint}
           </p>
           <ActionTable
-            rows={tableRows}
+            rows={view.rows}
             handled={filter === "handled"}
-            scanId={data.scan.id}
-            root={data.scan.root}
+            scanId={scanId}
+            root={root}
             platform={platform}
             onStatus={onStatus}
             notify={notify}
           />
+          <Pager page={view.page} pages={view.pages} count={view.count} pageSize={PAGE_SIZE} onPage={setPage} />
         </section>
       )}
 
@@ -183,7 +204,7 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
         </p>
       )}
 
-      {view.okCount > 0 && <p className="text-sm text-stone-500">問題なし {view.okCount}件（何もしなくて大丈夫です）</p>}
+      {view.okCount > 0 && <p className="text-sm text-stone-500">問題なし {view.okCount.toLocaleString()}件（何もしなくて大丈夫です）</p>}
 
       {toast && (
         <div

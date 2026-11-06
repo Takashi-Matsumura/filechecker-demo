@@ -1,9 +1,9 @@
 "use client";
 
 import { BackLink } from "./back-link";
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import { ActionList } from "./action-list";
-import type { FileItem, ScanData } from "./actions";
+import type { ScanData } from "./actions";
 import { formatDateTime, STATUS } from "./labels";
 import { ScanAnalysis } from "./scan-dashboard";
 
@@ -24,18 +24,21 @@ function formatDuration(ms: number): string {
 /** 実行中（ポーリングを続ける）状態 */
 const RUNNING = new Set(["queued", "walking", "processing", "pausing"]);
 
-/** 棚卸し結果のページ。データ取得とポーリングを受け持ち、「やること」と「詳しい分析」を切り替える */
+type Scan = ScanData["scan"];
+type Platform = NonNullable<ScanData["platform"]>;
+
+/**
+ * 棚卸し結果のページ。棚卸しの進み具合の取得とポーリングを受け持ち、「やること」と「詳しい分析」を切り替える。
+ * ファイルの一覧は、それぞれのタブが1ページ分ずつサーバから受け取る。
+ */
 export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [data, setData] = useState<ScanData | null>(null);
-  // 「元に戻す」などで後から呼ばれても、常に最新の状態を参照できるようにする
-  const dataRef = useRef<ScanData | null>(null);
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
+  const [data, setData] = useState<{ scan: Scan; platform: Platform } | null>(null);
   const [notFound, setNotFound] = useState(false);
   // 再開したときにポーリングをやり直すためのキー
   const [pollKey, setPollKey] = useState(0);
+  // 各タブに表示の取り直しを伝えるキー（解析中は20秒ごと、解析が終わったときにも増やす）
+  const [refreshKey, setRefreshKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [opError, setOpError] = useState<string | null>(null);
   // URL の #analysis で「詳しい分析」タブを直接開ける。サーバ側ではデータ未取得のため描画されず、不一致は起きない
@@ -54,31 +57,24 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     let tick = 0;
+    let wasRunning = false;
     // 解析が進んだ件数と時刻の記録（残り時間の計算用）。再開するたびに取り直す
     let first: { t: number; done: number } | null = null;
 
-    /** ファイルの一覧も含めて取り直す（やることの表示を更新する） */
-    const loadFull = async (): Promise<ScanData["scan"] | null> => {
-      const res = await fetch(`/api/scans/${id}`);
+    /** 進み具合だけを取り直す（ファイルが多くても軽い） */
+    const load = async (): Promise<Scan | null> => {
+      const res = await fetch(`/api/scans/${id}?files=0`);
       if (res.status === 404) {
         setNotFound(true);
         return null;
       }
-      const j: ScanData = await res.json();
+      if (!res.ok) return null;
+      const j: { scan: Scan; platform: Platform } = await res.json();
       if (stop) return null;
       setData(j);
       return j.scan;
     };
-    /** 進み具合だけを取り直す（ファイルが多くても軽い） */
-    const loadSummary = async (): Promise<ScanData["scan"] | null> => {
-      const res = await fetch(`/api/scans/${id}?files=0`);
-      if (!res.ok) return null;
-      const j: { scan: ScanData["scan"] } = await res.json();
-      if (stop) return null;
-      setData((prev) => (prev ? { ...prev, scan: j.scan } : prev));
-      return j.scan;
-    };
-    const updateEta = (scan: ScanData["scan"]) => {
+    const updateEta = (scan: Scan) => {
       if (scan.status !== "processing" || !scan.total) return setEta(null);
       const now = Date.now();
       if (!first) first = { t: now, done: scan.processed };
@@ -86,19 +82,22 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
       setEta(rate > 0 ? (scan.total - scan.processed) / rate : null);
     };
 
-    // 進み具合は2秒ごと、ファイルの一覧は20秒ごとに取り直す
-    const step = async (full: boolean) => {
-      const scan = full ? await loadFull() : await loadSummary();
+    // 進み具合は2秒ごとに取り直し、表示中のタブには20秒ごと（と解析の完了時）に取り直してもらう
+    const step = async () => {
+      const scan = await load();
       if (!scan || stop) return;
       updateEta(scan);
-      if (RUNNING.has(scan.status)) {
+      const running = RUNNING.has(scan.status);
+      if (running) {
         tick++;
-        timer = setTimeout(() => void step(tick % 10 === 0).catch(() => {}), 2000);
-      } else if (!full) {
-        await loadFull(); // 終わったら、最終的な結果を取り直す
+        if (tick % 10 === 0) setRefreshKey((k) => k + 1);
+        timer = setTimeout(() => void step().catch(() => {}), 2000);
+      } else if (wasRunning) {
+        setRefreshKey((k) => k + 1); // 終わったら、最終的な結果を取り直してもらう
       }
+      wasRunning = running;
     };
-    step(true).catch(() => {});
+    step().catch(() => {});
     return () => {
       stop = true;
       clearTimeout(timer);
@@ -113,24 +112,8 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
       const res = await fetch(`/api/scans/${id}/${action}`, { method: "POST" }).catch(() => null);
       if (!res?.ok) setOpError((await res?.json().catch(() => null))?.error ?? "操作できませんでした");
       setPollKey((k) => k + 1);
+      setRefreshKey((k) => k + 1);
       setBusy(false);
-    },
-    [id],
-  );
-
-  // 押した瞬間に画面へ反映し、保存に失敗したら元に戻す
-  const setStatus = useCallback(
-    async (fileId: number, status: FileItem["action_status"]) => {
-      const prev = dataRef.current?.files.find((f) => f.id === fileId)?.action_status ?? "todo";
-      setData((d) => d && { ...d, files: d.files.map((f) => (f.id === fileId ? { ...f, action_status: status } : f)) });
-      const res = await fetch(`/api/scans/${id}/files/${fileId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      }).catch(() => null);
-      if (!res?.ok) {
-        setData((d) => d && { ...d, files: d.files.map((f) => (f.id === fileId ? { ...f, action_status: prev } : f)) });
-      }
     },
     [id],
   );
@@ -252,9 +235,16 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
       </div>
 
       {tab === "actions" ? (
-        <ActionList data={data} onStatus={setStatus} incomplete={analyzing || paused} paused={paused} />
+        <ActionList
+          scanId={scan.id}
+          root={scan.root}
+          platform={data.platform}
+          refreshKey={refreshKey}
+          incomplete={analyzing || paused}
+          paused={paused}
+        />
       ) : (
-        <ScanAnalysis data={data} />
+        <ScanAnalysis scanId={scan.id} refreshKey={refreshKey} />
       )}
     </div>
   );
