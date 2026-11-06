@@ -134,6 +134,9 @@ describe("処理時間（どんな中身でも線形時間で終わる）", () =
     base64風: "QUJD".repeat(N / 4),
     数字の後の長い空白: "1" + " ".repeat(N),
     日付の形の繰り返し: "1/1/1 ".repeat(N / 6),
+    // 以前の生年月日のルール（\s*日?\s*）では、ここで約24秒かかっていた
+    "年月日の後の長い空白（生が続かない）": "1年1月1" + " ".repeat(N) + "x",
+    "日付の後の長い空白": "1/1/1" + " ".repeat(N),
   };
   for (const [name, text] of Object.entries(cases)) {
     it(name, () => {
