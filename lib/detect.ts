@@ -268,6 +268,8 @@ export interface Redacted {
   text: string;
   /** 種類ごとのマスク済み文脈（最大3件） */
   samples: Map<FindingType, string[]>;
+  /** マスク後のテキスト上での検出範囲（プレビューのハイライト用） */
+  placed: { type: FindingType; start: number; end: number }[];
 }
 
 /**
@@ -298,7 +300,7 @@ export function redact(text: string, spans: Span[], names: string[] = []): Redac
     list.push(`…${before}【${out.slice(p.start, p.end)}】${after}…`);
     samples.set(p.type, list);
   }
-  return { text: out, samples };
+  return { text: out, samples, placed };
 }
 
 const RANK: Record<Level, number> = { none: 0, low: 1, medium: 2, high: 3 };

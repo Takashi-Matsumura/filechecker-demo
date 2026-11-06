@@ -4,6 +4,7 @@ import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { RiskBadge } from "./scan-dashboard";
 import { formatDate, formatSize, METHOD, RECOMMENDATION, RISK, type Level } from "./labels";
+import { TextPreview } from "./text-preview";
 
 interface Finding {
   type: string;
@@ -167,16 +168,8 @@ export function FileDetail({ params }: { params: Promise<{ id: string; fileId: s
         </section>
       )}
 
-      {file.excerpt && (
-        <section className="rounded-xl border border-stone-200 bg-white p-5">
-          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold">内容の抜粋（マスク済み）</h2>
-            <span className="text-xs text-stone-400">検出した番号や連絡先、AI が推定した氏名を伏せて保存しています</span>
-          </div>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-stone-50 p-4 font-mono text-xs leading-relaxed text-stone-700">
-            {file.excerpt}
-          </pre>
-        </section>
+      {file.status === "done" && (file.excerpt || file.text_chars > 0) && (
+        <TextPreview scanId={id} fileId={fileId} excerpt={file.excerpt} />
       )}
     </div>
   );
