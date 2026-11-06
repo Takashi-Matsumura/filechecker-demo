@@ -87,11 +87,10 @@ export function unreadReason(f: FileItem): string | null {
 }
 
 export function bucketOf(f: FileItem): Bucket {
-  // 読み込みに失敗したファイルは、中身に何があるか分からないので人に確かめてもらう
-  if (f.status === "error") return "check";
+  // 中身を確認できなかったファイル（読み込みエラー・未対応の形式・大きすぎる）は、常に人に確かめてもらう。
+  // 名前や日付だけでは、安全とも、消してよいとも言えないため（AI の推奨や重複・古さより優先する）
+  if (unreadReason(f) !== null) return "check";
   if (f.status !== "done") return "ok"; // 解析中はやることに含めない
-  // 中身を読めなかったファイルは「問題なし」にしない（名前や日付だけでは安全と言えないため）
-  const unread = unreadReason(f) !== null;
   switch (f.ai?.recommendation) {
     case "restrict":
       return "move";
@@ -102,14 +101,14 @@ export function bucketOf(f: FileItem): Bucket {
     case "review":
       return "check";
     case "keep":
-      return unread ? "check" : "ok";
+      return "ok";
   }
   // AI の判定が無い場合はルールの結果から決める
   if (f.dup_of !== null) return "remove";
   if (f.risk === "high") return "move";
   if (f.risk === "medium") return "check";
   if (f.is_stale) return "tidy";
-  return unread ? "check" : "ok";
+  return "ok";
 }
 
 const LEVEL_RANK: Record<Level, number> = { high: 3, medium: 2, low: 1, none: 0 };
