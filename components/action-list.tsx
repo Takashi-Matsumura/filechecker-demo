@@ -284,36 +284,39 @@ function Reasons({ f, bucket }: Entry) {
   );
 }
 
-function Detail({ f, scanId }: { f: FileItem; scanId: number }) {
+/**
+ * プレビューのアイコン（目の形）。押すとファイル詳細画面に移り、
+ * AI の判断（要約・推奨アクション・理由）と、検出箇所に色を付けた内容のプレビューを見られる。
+ */
+function PreviewLink({ f, scanId, small }: { f: FileItem; scanId: number; small?: boolean }) {
+  const label = `「${fileName(f.rel_path)}」の詳細とプレビューを見る`;
   return (
-    <>
-      {f.ai?.reason && <p>{f.ai.reason}</p>}
-      {f.ai?.summary && <p className="text-stone-500">{f.ai.summary}</p>}
-      <Link href={`/scans/${scanId}/files/${f.id}`} className="inline-block text-teal-700 underline underline-offset-2">
-        詳しく見る
-      </Link>
-    </>
+    <Link
+      href={`/scans/${scanId}/files/${f.id}`}
+      aria-label={label}
+      title="詳細とプレビューを見る"
+      className={`flex shrink-0 items-center justify-center rounded-md text-stone-500 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-teal-600 ${
+        small ? "h-7 w-7" : "h-8 w-8"
+      }`}
+    >
+      <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z" />
+        <circle cx="12" cy="12" r="2.8" />
+      </svg>
+    </Link>
   );
 }
 
 // ---------------------------------------------------------------- まずこの3件の1行
 
 function Row({ f, bucket, ...ctx }: Entry & Ctx) {
-  const [open, setOpen] = useState(false);
   const b = BUCKETS[bucket];
   const { reveal, copyPath, mark } = useFileActions(f, ctx);
 
   return (
     <li className="border-b border-stone-100 last:border-b-0">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-        <button
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          aria-label="理由を表示"
-          className="w-4 shrink-0 text-xs text-stone-400 hover:text-stone-700"
-        >
-          {open ? "▾" : "▸"}
-        </button>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 pl-2 pr-4">
+        <PreviewLink f={f} scanId={ctx.scanId} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center gap-1 text-xs font-bold ${b.text}`}>
@@ -332,11 +335,6 @@ function Row({ f, bucket, ...ctx }: Entry & Ctx) {
           <SkipBtn onClick={() => mark("skipped")} />
         </div>
       </div>
-      {open && (
-        <div className="space-y-1 bg-stone-50 px-11 py-3 text-xs text-stone-600">
-          <Detail f={f} scanId={ctx.scanId} />
-        </div>
-      )}
     </li>
   );
 }
@@ -349,7 +347,7 @@ function ActionTable({ rows, handled, ...ctx }: { rows: Entry[]; handled: boolea
       <table className="w-full min-w-[720px] text-sm">
         <thead className="border-b border-stone-200 bg-stone-50 text-left text-xs text-stone-500">
           <tr>
-            <th className="w-8 px-2 py-2" aria-label="理由" />
+            <th className="w-10 px-1 py-2" aria-label="プレビュー" />
             <th className="px-2 py-2 font-medium">区分</th>
             <th className="px-2 py-2 font-medium">ファイル</th>
             <th className="px-2 py-2 font-medium">理由</th>
@@ -374,67 +372,50 @@ function ActionTable({ rows, handled, ...ctx }: { rows: Entry[]; handled: boolea
 }
 
 function TableRow({ f, bucket, ...ctx }: Entry & Ctx) {
-  const [open, setOpen] = useState(false);
   const b = BUCKETS[bucket];
   const handled = f.action_status !== "todo";
   const { reveal, copyPath, mark, restore } = useFileActions(f, ctx);
 
   return (
-    <>
-      <tr className="hover:bg-stone-50/70">
-        <td className="px-2 py-1.5 text-center">
-          <button
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            aria-label="理由を表示"
-            className="w-4 text-xs text-stone-400 hover:text-stone-700"
-          >
-            {open ? "▾" : "▸"}
-          </button>
-        </td>
-        <td className={`whitespace-nowrap px-2 py-1.5 ${handled ? "opacity-50" : ""}`}>
-          <span className={`inline-flex items-center gap-1 text-xs font-bold ${b.text}`}>
-            <BucketIcon bucket={bucket} />
-            {b.verb}
-          </span>
-        </td>
-        <td className={`max-w-xs px-2 py-1.5 ${handled ? "opacity-50" : ""}`}>
-          <div className={`truncate font-medium ${handled ? "line-through" : ""}`} title={fileName(f.rel_path)}>
-            {fileName(f.rel_path)}
-          </div>
-          <div className="truncate text-xs text-stone-400">{folderOf(f.rel_path)}</div>
-        </td>
-        <td className={`px-2 py-1.5 ${handled ? "opacity-50" : ""}`}>
-          <div className="flex flex-wrap items-center gap-1">
-            <Reasons f={f} bucket={bucket} />
-          </div>
-        </td>
-        <td className="px-3 py-1.5">
-          <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
-            {!handled ? (
-              <>
-                <IconBtn onClick={reveal} label={ctx.platform.revealLabel} icon="folder" />
-                <IconBtn onClick={copyPath} label="パスをコピー" icon="copy" />
-                <DoneBtn onClick={() => mark("done")} small />
-                <SkipBtn onClick={() => mark("skipped")} small />
-              </>
-            ) : (
-              <>
-                <span className="text-xs text-stone-500">{f.action_status === "done" ? "対応済み" : "対応しない"}</span>
-                <Btn onClick={restore}>戻す</Btn>
-              </>
-            )}
-          </div>
-        </td>
-      </tr>
-      {open && (
-        <tr>
-          <td colSpan={5} className="space-y-1 bg-stone-50 px-10 py-2.5 text-xs text-stone-600">
-            <Detail f={f} scanId={ctx.scanId} />
-          </td>
-        </tr>
-      )}
-    </>
+    <tr className="hover:bg-stone-50/70">
+      <td className="px-1 py-1.5">
+        <PreviewLink f={f} scanId={ctx.scanId} small />
+      </td>
+      <td className={`whitespace-nowrap px-2 py-1.5 ${handled ? "opacity-50" : ""}`}>
+        <span className={`inline-flex items-center gap-1 text-xs font-bold ${b.text}`}>
+          <BucketIcon bucket={bucket} />
+          {b.verb}
+        </span>
+      </td>
+      <td className={`max-w-xs px-2 py-1.5 ${handled ? "opacity-50" : ""}`}>
+        <div className={`truncate font-medium ${handled ? "line-through" : ""}`} title={fileName(f.rel_path)}>
+          {fileName(f.rel_path)}
+        </div>
+        <div className="truncate text-xs text-stone-400">{folderOf(f.rel_path)}</div>
+      </td>
+      <td className={`px-2 py-1.5 ${handled ? "opacity-50" : ""}`}>
+        <div className="flex flex-wrap items-center gap-1">
+          <Reasons f={f} bucket={bucket} />
+        </div>
+      </td>
+      <td className="px-3 py-1.5">
+        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+          {!handled ? (
+            <>
+              <IconBtn onClick={reveal} label={ctx.platform.revealLabel} icon="folder" />
+              <IconBtn onClick={copyPath} label="パスをコピー" icon="copy" />
+              <DoneBtn onClick={() => mark("done")} small />
+              <SkipBtn onClick={() => mark("skipped")} small />
+            </>
+          ) : (
+            <>
+              <span className="text-xs text-stone-500">{f.action_status === "done" ? "対応済み" : "対応しない"}</span>
+              <Btn onClick={restore}>戻す</Btn>
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 
