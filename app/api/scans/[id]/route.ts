@@ -10,7 +10,7 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/scans/[id]">
   if (req.nextUrl.searchParams.get("files") === "0") {
     const scan = getScanSummary(n);
     if (!scan) return Response.json({ error: "not found" }, { status: 404 });
-    return Response.json({ scan });
+    return Response.json({ scan, platform: platformInfo() });
   }
   const data = getScan(n);
   if (!data) return Response.json({ error: "not found" }, { status: 404 });
