@@ -216,14 +216,66 @@ function unpdf() {
   return pdfjsReady;
 }
 
+/**
+ * PDF の文字を、ページごとに読む。巨大な PDF（数万ページ・ページごとに大量の文字）で長引かないよう、
+ * 読むページ数・文字数・時間に上限を設ける。上限で打ち切った場合は note で知らせる。
+ * PDF.js は Node ではこのプロセスの中で解析するので、1ページの解析中は止められない。上限はページの間で確かめる。
+ */
+async function readPdfText(
+  doc: Awaited<ReturnType<Awaited<ReturnType<typeof unpdf>>["getDocumentProxy"]>>,
+  signal?: AbortSignal,
+): Promise<{ pages: string[]; note?: string }> {
+  const deadline = Date.now() + config.pdfTextTimeoutMs;
+  const last = Math.min(doc.numPages, config.maxPdfTextPages);
+  const pages: string[] = [];
+  let chars = 0;
+  for (let i = 1; i <= last; i++) {
+    signal?.throwIfAborted();
+    if (Date.now() > deadline) {
+      return { pages, note: `時間がかかるため、全${doc.numPages}ページ中、先頭${pages.length}ページのみ検査` };
+    }
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    page.cleanup();
+    const text = content.items
+      .map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : "") : ""))
+      .join("");
+    pages.push(text);
+    chars += text.length;
+    // 検査するのは先頭 maxTextChars 文字までなので、それ以上は読まない
+    if (chars > config.maxTextChars && i < doc.numPages) {
+      return { pages, note: `文字数が多いため、全${doc.numPages}ページ中、先頭${i}ページまで読み取り` };
+    }
+  }
+  if (doc.numPages > last) return { pages, note: `全${doc.numPages}ページ中、先頭${last}ページのみ検査` };
+  return { pages };
+}
+
 async function extractPdf(buf: Buffer, signal?: AbortSignal, allowOcr = true, ctx?: CallContext): Promise<Extracted> {
-  const { getDocumentProxy, extractText, renderPageAsImage } = await unpdf();
-  const doc = await getDocumentProxy(new Uint8Array(buf));
-  const { text, totalPages } = await extractText(doc, { mergePages: false });
+  const { getDocumentProxy, renderPageAsImage } = await unpdf();
+  // 画像の展開サイズに上限を設ける（巨大な画像を埋め込んだ PDF 対策）
+  const doc = await getDocumentProxy(new Uint8Array(buf), { maxImageSize: config.maxImagePixels });
+  try {
+    return await extractPdfDoc(doc, signal, allowOcr, ctx, renderPageAsImage);
+  } finally {
+    // 解析に使った資源を解放する（PDF.js 6 では loadingTask から破棄する）
+    await doc.loadingTask.destroy().catch(() => {});
+  }
+}
+
+async function extractPdfDoc(
+  doc: Awaited<ReturnType<Awaited<ReturnType<typeof unpdf>>["getDocumentProxy"]>>,
+  signal: AbortSignal | undefined,
+  allowOcr: boolean,
+  ctx: CallContext | undefined,
+  renderPageAsImage: Awaited<ReturnType<typeof unpdf>>["renderPageAsImage"],
+): Promise<Extracted> {
+  const totalPages = doc.numPages;
+  const { pages: text, note: textNote } = await readPdfText(doc, signal);
   const joined = text.join("\n");
-  // 1ページあたりの文字数が少なければスキャン PDF とみなす
-  if (joined.replace(/\s/g, "").length >= 30 * totalPages) {
-    return { text: joined, method: "pdf-text" };
+  // 1ページあたりの文字数が少なければスキャン PDF とみなす（読んだページ数で割る）
+  if (joined.replace(/\s/g, "").length >= 30 * Math.max(1, text.length)) {
+    return { text: joined, method: "pdf-text", note: textNote };
   }
   if (!allowOcr) throw new ExtractLimitError("文字情報のない PDF のため OCR が必要です");
   const pages = Math.min(totalPages, config.maxOcrPages);
