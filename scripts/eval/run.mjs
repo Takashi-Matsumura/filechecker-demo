@@ -31,7 +31,7 @@ try {
     console.log(`読み仮名   ${pr(m.readings)}`);
     console.log(`リスク     一致 ${pct(m.risk.ok, m.risk.total)}（${m.risk.ok}/${m.risk.total}）  正解より低い ${m.risk.under}`);
     console.log(`推奨       一致 ${pct(m.recommendation.ok, m.recommendation.total)}（${m.recommendation.ok}/${m.recommendation.total}）`);
-    console.log(`伏せ漏れ   ${m.leaks.leaked}/${m.leaks.total}`);
+    console.log(`伏せ漏れ   氏名 ${m.leaks.leaked}/${m.leaks.total}  番号 ${m.secretLeaks.leaked}/${m.secretLeaks.total}`);
     console.log(`読み取り   ${pct(m.ocr.found, m.ocr.total)}（${m.ocr.found}/${m.ocr.total}）`);
     console.log(`ルール検出 ${pr(m.rules)}`);
     if (m.aiFailures) console.log(`AI の失敗  ${m.aiFailures}件`);

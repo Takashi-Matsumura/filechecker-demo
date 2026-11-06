@@ -446,6 +446,8 @@ export interface EvalMetrics {
   recommendation: { ok: number; total: number };
   /** 伏せたあとに残った正解の氏名・読み仮名の数 */
   leaks: { leaked: number; total: number };
+  /** 伏せたあとに残った、伏せられるべき番号の数（古い記録には無い） */
+  secretLeaks?: { leaked: number; total: number };
   ocr: { found: number; total: number };
   aiFailures: number;
   /** ファイルごとの結果（氏名そのものは残さない） */
@@ -460,6 +462,7 @@ export interface EvalMetrics {
     recommendation: string | null;
     recommendationOk: boolean | null;
     leaked: number;
+    secretsLeaked?: number;
     ocr: { found: number; total: number } | null;
     error: string | null;
   }[];

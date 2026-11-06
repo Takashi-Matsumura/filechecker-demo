@@ -316,6 +316,7 @@ def expected() -> dict[str, dict]:
     - risk / recommendation: 受け入れてよい値（判断が分かれうるものは複数）
     - ocr:     画像から読み取れるべき文字列（空白は無視して照合）
     - skip_ai: アプリでは AI を呼ばないファイル（重複は原本の結果を流用する）
+    - secrets: 伏せられるべき番号（ファイルに書かれた表記のまま。伏せたあとの本文に残っていないかを数える）
     """
     names = [x[0] for x in PEOPLE]
     readings = [x[1] for x in PEOPLE]
@@ -516,23 +517,31 @@ def generate_hard(out: Path) -> list[tuple[str, str]]:
 def expected_hard() -> dict[str, dict]:
     """難しいテストデータの正解（形式は expected() と同じ）。"""
     hp = HARD_PEOPLE
+    zen = str.maketrans("0123456789-", "０１２３４５６７８９－")
+    # 崩れた名簿では、奇数行の電話番号を全角で書いている（generate_hard と同じ規則）
+    roster_phones = [y[4].translate(zen) if i % 2 else y[4] for i, y in enumerate(hp[2:6], 1)]
     return {
         "かすれた申込書_スキャン.jpg": {"types": ["phone", "email", "address"], "names": [hp[0][0]], "readings": [hp[0][1]],
+                                    "secrets": [hp[0][4]],
                                     "risk": ["medium", "high"], "recommendation": ["restrict"],
                                     "ocr": [hp[0][0], hp[0][1], hp[0][2], hp[0][4], hp[0][5]]},
         "名刺_写真.jpg": {"types": ["phone", "email", "address", "postal_code"], "names": [hp[1][0]], "readings": ["Yumi Ogawa"],
+                       "secrets": [hp[1][3], hp[1][4]],
                        "risk": ["low", "medium"], "recommendation": ["keep", "restrict", "review"],
                        "ocr": [hp[1][0], "Yumi Ogawa", hp[1][3], hp[1][4], hp[1][5]]},
-        "崩れた名簿.csv": {"types": ["phone", "email"], "names": [y[0] for y in hp[2:6]],
+        "崩れた名簿.csv": {"types": ["phone", "email"], "names": [y[0] for y in hp[2:6]], "secrets": roster_phones,
                          "readings": [y[1] for y in hp[2:6]],  # 正解は全角で持つ（評価の照合では半角・全角の違いを無視する）
                          "risk": ["medium", "high"], "recommendation": ["restrict"]},
         "全体会議_議事録.docx": {"types": [], "names": MEETING_PEOPLE, "readings": [],
                              "risk": ["low", "medium"], "recommendation": ["keep", "review", "restrict"]},
         "問い合わせメール.txt": {"types": ["phone", "email", "address", "postal_code"], "names": [hp[3][0]], "readings": [],
+                             "secrets": [hp[3][3], hp[3][4]],
                              "risk": ["medium"], "recommendation": ["restrict", "review", "delete"]},
         "Resume_英文.docx": {"types": ["phone", "email"], "names": ["Daisuke Matsumoto"], "readings": [],
+                           "secrets": ["+81-80-5566-7788"],
                            "risk": ["medium", "high"], "recommendation": ["restrict", "review"]},
         "提出書類_2ページ.pdf": {"types": ["mynumber", "phone", "address", "confidential"], "names": [hp[5][0]], "readings": [],
+                            "secrets": [hp[5][4]],
                             "risk": ["high"], "recommendation": ["restrict"],
                             "ocr": [hp[5][0], hp[5][6], hp[5][2], hp[5][4]]},
         "番号っぽいが個人情報ではない.txt": {"types": [], "names": [], "readings": [], "risk": ["none", "low"],
