@@ -70,8 +70,8 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
 
   return (
     <div className="space-y-6">
-      {/* 進捗 */}
-      <section className="rounded-xl border border-stone-200 bg-white p-5">
+      {/* やること: 進捗 + まずこの3件（ここを順に片付けていけば作業が終わる） */}
+      <section className="rounded-xl border-2 border-stone-900/80 bg-white p-5">
         {allDone ? (
           <div className="flex items-center gap-3">
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-lg text-emerald-700" aria-hidden>
@@ -104,26 +104,27 @@ export function ActionList({ data, onStatus, incomplete, paused }: Props) {
             >
               {pct > 0 && <div className="aqua-progress-bar" style={{ width: `${pct}%` }} />}
             </div>
+
+            {view.top.length > 0 && (
+              <div className="mt-5 space-y-2">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <h2 className="text-sm font-bold">
+                    まずこの{view.top.length}件<span className="ml-1.5 font-medium text-stone-500">（優先度の高い順）</span>
+                  </h2>
+                  <p className="text-xs text-stone-500">
+                    リスクの高さ → マイナンバーなど重要な情報の件数 → 区分 の順に並べています。対応すると次のファイルが繰り上がります
+                  </p>
+                </div>
+                <ul className="overflow-hidden rounded-lg border border-stone-200">
+                  {view.top.map(({ f, bucket }) => (
+                    <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} platform={platform} onStatus={onStatus} notify={notify} />
+                  ))}
+                </ul>
+              </div>
+            )}
           </>
         )}
       </section>
-
-      {/* まずこの3件 */}
-      {view.top.length > 0 && (
-        <section className="space-y-2">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <h2 className="text-sm font-bold">
-              まずこの{view.top.length}件<span className="ml-1.5 font-medium text-stone-500">（優先度の高い順）</span>
-            </h2>
-            <p className="text-xs text-stone-500">リスクの高さ → マイナンバーなど重要な情報の件数 → 区分 の順に並べています</p>
-          </div>
-          <ul className="overflow-hidden rounded-xl border-2 border-stone-900/80 bg-white">
-            {view.top.map(({ f, bucket }) => (
-              <Row key={f.id} f={f} bucket={bucket} scanId={data.scan.id} root={data.scan.root} platform={platform} onStatus={onStatus} notify={notify} />
-            ))}
-          </ul>
-        </section>
-      )}
 
       {/* 残り（区分・対応済みをフィルタで切り替える表） */}
       {(view.rest.length > 0 || view.handled.length > 0) && (
