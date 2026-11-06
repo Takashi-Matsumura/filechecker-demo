@@ -246,22 +246,52 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * 氏名を伏せる。表記ゆれ（「高橋美咲」と「高橋 美咲」）に対応するため文字間の空白を許して照合し、
  * 先頭1文字と空白を残して他を＊にする。長さが変わらないので、検出位置はずれない。
  */
-export function maskNames(text: string, names: string[]): string {
+/** 1つの氏名の一致を伏せる（先頭の1文字と空白は残す） */
+function maskMatch(m: string): string {
+  let first = true;
+  return m.replace(/[^\s　]/g, (c) => {
+    if (first) {
+      first = false;
+      return c;
+    }
+    return "＊";
+  });
+}
+
+/** 氏名の範囲 [start, end)。同じ長さで伏せるので、伏せる前後で位置は変わらない */
+export type NameRange = [number, number];
+
+/**
+ * テキスト中で氏名が出てくる範囲を返す。maskNames と同じ順・同じ規則で探す。
+ * 氏名の文字列そのものを保存せずに、あとで同じ箇所を伏せ直すために使う。
+ */
+export function findNameRanges(text: string, names: string[]): NameRange[] {
   let out = text;
+  const ranges: NameRange[] = [];
   for (const v of nameVariants(names)) {
     const re = new RegExp([...v].map(escapeRe).join("[\\s\\u3000]*"), "g");
-    out = out.replace(re, (m) => {
-      let first = true;
-      return m.replace(/[^\s　]/g, (c) => {
-        if (first) {
-          first = false;
-          return c;
-        }
-        return "＊";
-      });
+    out = out.replace(re, (m: string, offset: number) => {
+      ranges.push([offset, offset + m.length]);
+      return maskMatch(m);
     });
   }
-  return out;
+  return ranges.sort((a, b) => a[0] - b[0]);
+}
+
+/** findNameRanges で得た範囲を伏せる */
+export function maskNameRanges(text: string, ranges: NameRange[]): string {
+  let out = "";
+  let pos = 0;
+  for (const [start, end] of ranges) {
+    if (start < pos || end > text.length) continue;
+    out += text.slice(pos, start) + maskMatch(text.slice(start, end));
+    pos = end;
+  }
+  return out + text.slice(pos);
+}
+
+export function maskNames(text: string, names: string[]): string {
+  return maskNameRanges(text, findNameRanges(text, names));
 }
 
 export interface Redacted {

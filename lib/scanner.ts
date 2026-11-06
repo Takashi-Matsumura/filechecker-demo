@@ -4,7 +4,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
 import { db } from "./db";
-import { detect, FINDING_LABELS, maskNames, maxLevel, redact, ruleLevel, type Finding, type FindingType, type Level } from "./detect";
+import {
+  detect,
+  findNameRanges,
+  FINDING_LABELS,
+  maskNameRanges,
+  maskNames,
+  maxLevel,
+  redact,
+  ruleLevel,
+  type Finding,
+  type FindingType,
+  type Level,
+  type NameRange,
+} from "./detect";
 import { extract, kindOf } from "./extract";
 import { judgeFile, resolveConcurrency, type AiJudgement } from "./llm";
 
@@ -292,7 +305,7 @@ async function copyFromRepresentative(id: number, repId: number, signal: AbortSi
   ai.reason = `同じ内容のファイルが「${rep.rel_path as string}」にあります（重複）`;
   d.prepare(
     `UPDATE files SET status='done', error=?, extract_method=?, text_chars=?, excerpt=?, findings_json=?,
-       rule_level=?, ai_json=?, risk=? WHERE id=?`,
+       rule_level=?, ai_json=?, risk=?, name_ranges=? WHERE id=?`,
   ).run(
     "内容が同一のため、原本の解析結果を流用",
     rep.extract_method as string | null,
@@ -302,6 +315,8 @@ async function copyFromRepresentative(id: number, repId: number, signal: AbortSi
     rep.rule_level as string,
     JSON.stringify(ai),
     rep.risk as string,
+    // 内容が同一なので、氏名の位置もそのまま使える
+    (rep.name_ranges as string | null) ?? null,
     id,
   );
   return true;
@@ -365,6 +380,8 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   }
 
   const names = (ai?.person_names ?? []).filter((n) => n.trim().length >= 2);
+  // プレビューで同じ箇所を伏せ直せるよう、氏名の「位置」だけを残す（マスク後テキスト上の座標）
+  const nameRanges = findNameRanges(masked, names);
   // 最終的なマスク（番号類 + AI が見つけた氏名）。サンプルと抜粋はここから作る
   const final = redact(text, spans, names);
   const allFindings: Finding[] = findings.map((f) => ({ ...f, samples: final.samples.get(f.type) ?? [] }));
@@ -394,7 +411,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
 
   d.prepare(
     `UPDATE files SET status='done', error=?, extract_method=?, text_chars=?, excerpt=?, findings_json=?,
-       rule_level=?, ai_json=?, risk=? WHERE id=?`,
+       rule_level=?, ai_json=?, risk=?, name_ranges=? WHERE id=?`,
   ).run(
     notes.length ? notes.join(" / ") : null,
     method,
@@ -404,6 +421,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
     level,
     JSON.stringify(aiStored),
     risk,
+    JSON.stringify(nameRanges),
     id,
   );
 }
@@ -635,14 +653,24 @@ export type Preview =
 export async function buildPreview(scanId: number, fileId: number): Promise<Preview | null> {
   const row = db()
     .prepare(
-      `SELECT s.root AS root, f.rel_path AS rel, f.ext AS ext, f.sha256 AS sha256, f.status AS status, f.extract_method AS method
+      `SELECT s.root AS root, f.rel_path AS rel, f.ext AS ext, f.sha256 AS sha256, f.status AS status, f.extract_method AS method,
+              f.findings_json AS findings, f.name_ranges AS nameRanges
          FROM files f JOIN scans s ON s.id = f.scan_id WHERE f.id=? AND f.scan_id=?`,
     )
-    .get(fileId, scanId) as { root: string; rel: string; ext: string; sha256: string | null; status: string; method: string | null } | undefined;
+    .get(fileId, scanId) as
+    | { root: string; rel: string; ext: string; sha256: string | null; status: string; method: string | null; findings: string; nameRanges: string | null }
+    | undefined;
   if (!row) return null;
   if (row.status !== "done") return { available: false, reason: "まだ解析が終わっていません" };
   if (row.method === "ocr") return { available: false, reason: "画像から文字を読み取ったファイルのため、プレビューの代わりに保存済みの抜粋を表示しています" };
   if (row.method === "none" || !row.method) return { available: false, reason: "このファイルの形式は内容を読み取れません" };
+
+  // 氏名が見つかったファイルは、スキャン時に残した位置で伏せ直す。伏せられる保証がなければ表示しない
+  const person = (JSON.parse(row.findings) as Finding[]).find((f) => f.type === "person_name");
+  const ranges = person ? parseNameRanges(row.nameRanges) : [];
+  if (person && !ranges) {
+    return { available: false, reason: "氏名を伏せるための情報がない以前の棚卸しのため、保存済みの抜粋を表示しています。もう一度棚卸しするとプレビューできます" };
+  }
 
   let buf: Buffer | "too_large";
   try {
@@ -652,18 +680,49 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
   }
   if (buf === "too_large") return { available: false, reason: "サイズが大きいためプレビューできません" };
 
-  const changed = row.sha256 !== null && crypto.createHash("sha256").update(buf).digest("hex") !== row.sha256;
+  const changed = row.sha256 === null || crypto.createHash("sha256").update(buf).digest("hex") !== row.sha256;
+  if (person && changed) {
+    return { available: false, reason: "棚卸しのあとに内容が変わり、氏名を確実に伏せられないため、保存済みの抜粋を表示しています" };
+  }
   const r = await extract(buf, row.ext, undefined, { allowOcr: false });
   if (r.method === "none") return { available: false, reason: r.note ?? "内容を読み取れませんでした" };
 
   const { findings, spans } = detect(r.text);
   const meta = new Map(findings.map((f) => [f.type, f]));
   const red = redact(r.text, spans);
+  const nameRanges = ranges ?? [];
+  if (nameRanges.some(([, end]) => end > red.text.length)) {
+    return { available: false, reason: "氏名の位置が本文と合わないため、保存済みの抜粋を表示しています" };
+  }
+  const marks: PreviewMark[] = red.placed.map((p) => ({
+    ...p,
+    label: meta.get(p.type)?.label ?? FINDING_LABELS[p.type],
+    level: meta.get(p.type)?.level ?? "low",
+  }));
+  // 氏名もハイライトする（番号などの検出箇所と重なるものは除く）
+  for (const [start, end] of nameRanges) {
+    if (marks.some((m) => start < m.end && end > m.start)) continue;
+    marks.push({ type: "person_name", label: person?.label ?? FINDING_LABELS.person_name, level: person?.level ?? "low", start, end });
+  }
+  marks.sort((a, b) => a.start - b.start);
   return {
     available: true,
-    text: red.text,
-    marks: red.placed.map((p) => ({ ...p, label: meta.get(p.type)?.label ?? FINDING_LABELS[p.type], level: meta.get(p.type)?.level ?? "low" })),
+    text: maskNameRanges(red.text, nameRanges),
+    marks,
     changed,
     note: r.note ?? null,
   };
+}
+
+/** 保存した氏名の位置を読む。形が正しくなければ null（伏せられないものとして扱う） */
+function parseNameRanges(json: string | null): NameRange[] | null {
+  if (!json) return null;
+  try {
+    const v = JSON.parse(json) as unknown;
+    if (!Array.isArray(v)) return null;
+    const ok = v.every((r) => Array.isArray(r) && r.length === 2 && Number.isInteger(r[0]) && Number.isInteger(r[1]) && r[0] >= 0 && r[1] > r[0]);
+    return ok ? (v as NameRange[]) : null;
+  } catch {
+    return null;
+  }
 }

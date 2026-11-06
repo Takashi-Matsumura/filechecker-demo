@@ -92,7 +92,7 @@ export function TextPreview({ scanId, fileId, excerpt }: { scanId: string; fileI
         <h2 className="text-sm font-semibold">内容のプレビュー</h2>
         <span className="text-xs text-stone-400">
           {preview?.available
-            ? "検出した箇所に色を付けています。番号などは伏せて表示し、この内容は保存しません"
+            ? "検出した箇所に色を付けています。番号や氏名は伏せて表示し、この内容は保存しません"
             : "検出した番号や連絡先、AI が推定した氏名を伏せて保存した抜粋です"}
         </span>
       </div>
@@ -128,7 +128,7 @@ export function TextPreview({ scanId, fileId, excerpt }: { scanId: string; fileI
               <span className="text-xs text-stone-400">押すたびに次の箇所へ移動します</span>
             </div>
           ) : (
-            <p className="text-xs text-stone-500">番号や連絡先などの検出箇所はありません（氏名は AI の推定のため、ここでは色を付けません）。</p>
+            <p className="text-xs text-stone-500">個人情報や機密表示の検出箇所はありません。</p>
           )}
           <div
             ref={boxRef}
