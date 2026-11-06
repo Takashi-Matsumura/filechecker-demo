@@ -252,7 +252,7 @@ async function runScan(scanId: number, root: string, signal: AbortSignal) {
         const abs = await safeFilePath(root, job.rel_path);
         if (!abs) throw new Error("ファイルが見つからないか、スキャン対象の範囲外に変わったため処理しませんでした");
         if (job.dup_of === null || !(await copyFromRepresentative(job.id, job.dup_of, signal))) {
-          await processFile(job.id, abs, job.ext, signal);
+          await processFile(job.id, root, job.ext, signal);
         }
       } catch (e) {
         // 中断で打ち切ったファイルは「未処理」のまま残し、再開時にやり直す
@@ -316,7 +316,7 @@ const FALLBACK_REC: Record<Level, AiJudgement["recommendation"]> = {
   none: "keep",
 };
 
-async function processFile(id: number, abs: string, ext: string, signal: AbortSignal) {
+async function processFile(id: number, root: string, ext: string, signal: AbortSignal) {
   const d = db();
   const row = d.prepare(`SELECT rel_path, size, mtime, is_stale, dup_of FROM files WHERE id=?`).get(id) as {
     rel_path: string;
@@ -329,10 +329,11 @@ async function processFile(id: number, abs: string, ext: string, signal: AbortSi
   let text = "";
   let method = "none";
   const notes: string[] = [];
-  if (row.size > config.maxReadBytes) {
+  // パスは検証つきで開き、開いたファイルが範囲内の実体と同じであることを確かめてから読む
+  const buf = row.size > config.maxReadBytes ? "too_large" : await readValidatedFile(root, row.rel_path);
+  if (buf === "too_large") {
     notes.push("サイズが大きいため内容は未検査");
   } else {
-    const buf = await readFileNoFollow(abs);
     const r = await extract(buf, ext, signal);
     text = r.text;
     method = r.method;
@@ -542,11 +543,62 @@ async function safeFilePath(root: string, rel: string): Promise<string | null> {
   return real;
 }
 
-/** 最後の要素がシンボリックリンクなら開かない（検証から読み込みまでの間の差し替え対策） */
+// ---------------------------------------------------------------- 検証つきの読み込み
+
+/** 最後の要素がシンボリックリンクなら開かない */
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
-async function readFileNoFollow(file: string): Promise<Buffer> {
-  const fh = await fs.open(file, fsConstants.O_RDONLY | O_NOFOLLOW);
+
+export class PathChangedError extends Error {}
+
+/** ファイルの同一性（デバイス番号 + inode 番号） */
+interface FileIdentity {
+  dev: bigint;
+  ino: bigint;
+}
+
+/**
+ * パスを検証してから O_NOFOLLOW で開き、開いたファイルの同一性を返す。
+ * 途中のフォルダの差し替えは O_NOFOLLOW では防げないので、呼び出し側は
+ * 開いたあとに stillSameFile() で確かめ直すこと。
+ */
+export async function openValidated(root: string, rel: string) {
+  const abs = await safeFilePath(root, rel);
+  if (!abs) throw new PathChangedError("ファイルが見つからないか、スキャン対象の範囲外に変わったため処理しませんでした");
+  const fh = await fs.open(abs, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
+    const st = await fh.stat({ bigint: true });
+    if (!st.isFile()) throw new PathChangedError("通常のファイルではないため処理しませんでした");
+    return { fh, abs, identity: { dev: st.dev, ino: st.ino } as FileIdentity, size: Number(st.size) };
+  } catch (e) {
+    await fh.close();
+    throw e;
+  }
+}
+
+/**
+ * 開いたあとにパスを検証し直し、その実体が「開いたファイル」と同じかを確かめる。
+ * 検証から open までの間に途中のフォルダが範囲外へのリンクに差し替えられていた場合、
+ * 開いたファイルの同一性が、範囲内の実体と一致しなくなるので検出できる。
+ */
+export async function stillSameFile(root: string, rel: string, abs: string, identity: FileIdentity): Promise<boolean> {
+  const again = await safeFilePath(root, rel);
+  if (again !== abs) return false;
+  try {
+    const st = await fs.stat(again, { bigint: true });
+    return st.dev === identity.dev && st.ino === identity.ino;
+  } catch {
+    return false;
+  }
+}
+
+/** 検証つきでファイルを読む。サイズの上限は、開いたファイルの実際のサイズで判定する */
+async function readValidatedFile(root: string, rel: string): Promise<Buffer | "too_large"> {
+  const { fh, abs, identity, size } = await openValidated(root, rel);
+  try {
+    if (!(await stillSameFile(root, rel, abs, identity))) {
+      throw new PathChangedError("読み込み中にファイルの場所が変わったため処理しませんでした");
+    }
+    if (size > config.maxReadBytes) return "too_large";
     return await fh.readFile();
   } finally {
     await fh.close();
