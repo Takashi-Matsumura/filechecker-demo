@@ -265,6 +265,32 @@ export function judgeVersions(): JudgeVersion[] {
   }
 }
 
+/** AI の記録がある棚卸しの一覧（新しい順）。絞り込みの選択肢に使う。棚卸しの記録を消したものも含める */
+export interface ScanOption {
+  id: number;
+  /** 棚卸しの記録が残っていれば、そのフォルダと日時 */
+  root: string | null;
+  createdAt: string | null;
+  total: number | null;
+  /** AI の呼び出しの回数 */
+  calls: number;
+}
+
+export function scanOptions(): ScanOption[] {
+  try {
+    return db()
+      .prepare(
+        `SELECT c.scan_id AS id, s.root AS root, s.created_at AS createdAt, s.total AS total, count(*) AS calls
+           FROM ai_calls c LEFT JOIN scans s ON s.id = c.scan_id
+          WHERE c.scan_id IS NOT NULL
+          GROUP BY c.scan_id ORDER BY c.scan_id DESC`,
+      )
+      .all() as unknown as ScanOption[];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * AI の性能の集計。
  * since（ISO 日時）以降の記録だけを対象にする（null ならすべて）。
@@ -272,7 +298,7 @@ export function judgeVersions(): JudgeVersion[] {
  * 判定以外（文字の読み取り・氏名の補完）は別の指示文なので、その版の判定と同じファイルの処理だったかで絞る
  * （棚卸しの分は棚卸しとファイルの番号で、評価の分はその版で行った評価の実行時間内かで結びつける）。
  */
-export function aiStats(since: string | null, version: string | null = null): AiStats {
+export function aiStats(since: string | null, version: string | null = null, scanId: number | null = null): AiStats {
   const d = db();
   let calls = d
     .prepare(
@@ -280,6 +306,8 @@ export function aiStats(since: string | null, version: string | null = null): Ai
          FROM ai_calls WHERE started_at >= ? ORDER BY started_at`,
     )
     .all(since ?? "") as CallRow[];
+  // 棚卸しを指定したときは、その棚卸しの記録だけ（評価の記録は棚卸しに属さないので含めない）
+  if (scanId !== null) calls = calls.filter((c) => c.scan_id === scanId);
   if (version) {
     const files = new Set(
       (d.prepare(`SELECT scan_id, file_id FROM ai_file_stats WHERE prompt_version=?`).all(version) as { scan_id: number; file_id: number }[]).map(
@@ -313,9 +341,9 @@ export function aiStats(since: string | null, version: string | null = null): Ai
     .prepare(
       `SELECT rule_level, ai_ok, ai_risk, final_recommendation, names_ai, names_layout, names_both,
               readings_ai, readings_layout, readings_both
-         FROM ai_file_stats WHERE created_at >= ? AND (? IS NULL OR prompt_version = ?)`,
+         FROM ai_file_stats WHERE created_at >= ? AND (? IS NULL OR prompt_version = ?) AND (? IS NULL OR scan_id = ?)`,
     )
-    .all(since ?? "", version, version) as {
+    .all(since ?? "", version, version, scanId, scanId) as {
     rule_level: string;
     ai_ok: number;
     ai_risk: string | null;
@@ -359,9 +387,9 @@ export function aiStats(since: string | null, version: string | null = null): Ai
       `SELECT f.bucket, f.final_recommendation, f.unread, f.status, f.prompt_version
          FROM ai_feedback f
         WHERE f.id = (SELECT max(id) FROM ai_feedback g WHERE g.scan_id = f.scan_id AND g.file_id = f.file_id)
-          AND f.status <> 'todo' AND f.created_at >= ? AND (? IS NULL OR f.prompt_version = ?)`,
+          AND f.status <> 'todo' AND f.created_at >= ? AND (? IS NULL OR f.prompt_version = ?) AND (? IS NULL OR f.scan_id = ?)`,
     )
-    .all(since ?? "", version, version) as { bucket: string; final_recommendation: string | null; unread: number; status: string; prompt_version: string | null }[];
+    .all(since ?? "", version, version, scanId, scanId) as { bucket: string; final_recommendation: string | null; unread: number; status: string; prompt_version: string | null }[];
   const empty = (): FeedbackSummary => ({ done: 0, skipped: 0 });
   const add = (m: FeedbackSummary, status: string) => (status === "done" ? m.done++ : m.skipped++);
   const feedback: AiStats["feedback"] = { total: empty(), byBucket: {}, byRecommendation: {}, byVersion: [], unread: empty() };
@@ -381,7 +409,8 @@ export function aiStats(since: string | null, version: string | null = null): Ai
 
   return {
     since,
-    evals: version ? listEvals(1000).filter((e) => e.judgeVersion === version).slice(0, 20) : listEvals(),
+    evals:
+      scanId !== null ? [] : version ? listEvals(1000).filter((e) => e.judgeVersion === version).slice(0, 20) : listEvals(),
     feedback,
     byKind,
     byVersion,
