@@ -67,6 +67,10 @@ function open(): DatabaseSync {
     db.exec(`ALTER TABLE files ADD COLUMN action_status TEXT NOT NULL DEFAULT 'todo'`);
     db.exec(`ALTER TABLE files ADD COLUMN action_at TEXT`);
   }
+  if (!fileCols.some((c) => c.name === "name_ranges")) {
+    // AI が推定した氏名の位置（マスク後テキスト上の [start, end) の JSON）。氏名の文字列そのものは保存しない
+    db.exec(`ALTER TABLE files ADD COLUMN name_ranges TEXT`);
+  }
   return db;
 }
 
