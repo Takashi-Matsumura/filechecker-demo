@@ -1,0 +1,283 @@
+/**
+ * AI の性能分析のための記録。
+ * 個人情報を残さないため、本文や AI の入出力そのものは保存せず、数字と種類だけを記録する。
+ * 棚卸しの記録とは切り離してためる（棚卸しを消しても残る）。
+ */
+import crypto from "node:crypto";
+import { db } from "./db";
+
+export type CallKind = "ocr" | "judge";
+export type ErrorKind = "timeout" | "http" | "network" | "parse" | "aborted";
+
+/** どの棚卸しのどのファイルの処理か（分かる範囲で） */
+export interface CallContext {
+  scanId?: number;
+  fileId?: number;
+  ext?: string;
+}
+
+export interface CallRecord extends CallContext {
+  kind: CallKind;
+  model: string | null;
+  promptVersion: string;
+  startedAt: string;
+  durationMs: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  ok: boolean;
+  errorKind: ErrorKind | null;
+  inputChars: number | null;
+}
+
+/** 指示文と出力形式から作る短い識別子。指示文を書き換えると変わるので、変更の前後を比べられる */
+export function promptVersion(...parts: string[]): string {
+  return crypto.createHash("sha256").update(parts.join("\n---\n")).digest("hex").slice(0, 8);
+}
+
+/** AI の呼び出し1回を記録する。記録に失敗しても棚卸しは止めない。記録の ID を返す */
+export function recordAiCall(r: CallRecord): number | null {
+  try {
+    const res = db()
+      .prepare(
+        `INSERT INTO ai_calls (scan_id, file_id, ext, kind, model, prompt_version, started_at, duration_ms,
+           prompt_tokens, completion_tokens, ok, error_kind, input_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        r.scanId ?? null, r.fileId ?? null, r.ext ?? null, r.kind, r.model, r.promptVersion, r.startedAt, Math.round(r.durationMs),
+        r.promptTokens, r.completionTokens, r.ok ? 1 : 0, r.errorKind, r.inputChars,
+      );
+    return Number(res.lastInsertRowid);
+  } catch {
+    return null;
+  }
+}
+
+/** 応答は届いたが JSON として読めなかったときに、記録を失敗に直す */
+export function markParseError(callId: number | null) {
+  if (callId === null) return;
+  try {
+    db().prepare(`UPDATE ai_calls SET ok=0, error_kind='parse' WHERE id=?`).run(callId);
+  } catch {
+    // 記録の失敗は無視する
+  }
+}
+
+export interface FileStatsRecord {
+  scanId: number;
+  fileId: number;
+  ext: string;
+  extractMethod: string;
+  ruleLevel: string;
+  aiOk: boolean;
+  aiRisk: string | null;
+  finalRisk: string;
+  aiRecommendation: string | null;
+  finalRecommendation: string | null;
+  namesAi: number;
+  namesLayout: number;
+  namesBoth: number;
+  readingsAi: number;
+  readingsLayout: number;
+  readingsBoth: number;
+  findingTypes: string[];
+  promptVersion: string | null;
+}
+
+/** ファイルごとの「ルール・AI・書式」の判断を並べて記録する。記録に失敗しても棚卸しは止めない */
+export function recordFileStats(r: FileStatsRecord) {
+  try {
+    db()
+      .prepare(
+        `INSERT INTO ai_file_stats (scan_id, file_id, ext, extract_method, rule_level, ai_ok, ai_risk, final_risk,
+           ai_recommendation, final_recommendation, names_ai, names_layout, names_both, readings_ai, readings_layout,
+           readings_both, finding_types, prompt_version, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        r.scanId, r.fileId, r.ext, r.extractMethod, r.ruleLevel, r.aiOk ? 1 : 0, r.aiRisk, r.finalRisk,
+        r.aiRecommendation, r.finalRecommendation, r.namesAi, r.namesLayout, r.namesBoth, r.readingsAi, r.readingsLayout,
+        r.readingsBoth, r.findingTypes.join(","), r.promptVersion, new Date().toISOString(),
+      );
+  } catch {
+    // 記録の失敗は無視する
+  }
+}
+
+/** 空白の違いを無視して、2つの名前の一覧に共通するものの数を数える */
+export function countOverlap(a: string[], b: string[]): number {
+  const key = (s: string) => s.replace(/[\s　]/g, "");
+  const set = new Set(a.map(key));
+  return new Set(b.map(key).filter((k) => set.has(k))).size;
+}
+
+// ---------------------------------------------------------------- 集計
+
+export interface CallSummary {
+  kind: CallKind;
+  model: string | null;
+  promptVersion: string;
+  /** 中断を除いた呼び出し回数 */
+  calls: number;
+  failures: number;
+  failuresByKind: Partial<Record<ErrorKind, number>>;
+  aborted: number;
+  avgMs: number | null;
+  p90Ms: number | null;
+  /** 成功した呼び出しの、生成トークン数 ÷ 時間 */
+  tokensPerSec: number | null;
+  avgCompletionTokens: number | null;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+export interface AiStats {
+  since: string | null;
+  byKind: CallSummary[];
+  byVersion: CallSummary[];
+  byExt: { kind: CallKind; ext: string; calls: number; avgMs: number | null }[];
+  files: {
+    total: number;
+    aiFailed: number;
+    /** ルールのリスク × AI のリスク（AI の判定が取れたファイル） */
+    riskMatrix: Record<string, Record<string, number>>;
+    /** AI がルールより低いリスクと判定した件数（見落としの疑い） */
+    aiLowerThanRule: number;
+    aiHigherThanRule: number;
+    recommendations: Record<string, number>;
+    names: { ai: number; layout: number; both: number; aiOnlyFiles: number };
+    readings: { ai: number; layout: number; both: number };
+  };
+}
+
+const RANK: Record<string, number> = { none: 0, low: 1, medium: 2, high: 3 };
+
+type CallRow = {
+  kind: CallKind;
+  model: string | null;
+  prompt_version: string;
+  ext: string | null;
+  started_at: string;
+  duration_ms: number;
+  completion_tokens: number | null;
+  ok: number;
+  error_kind: ErrorKind | null;
+};
+
+function summarize(rows: CallRow[]): Omit<CallSummary, "kind" | "model" | "promptVersion"> {
+  const counted = rows.filter((r) => r.error_kind !== "aborted");
+  const okRows = counted.filter((r) => r.ok);
+  const failuresByKind: Partial<Record<ErrorKind, number>> = {};
+  for (const r of counted) if (!r.ok && r.error_kind) failuresByKind[r.error_kind] = (failuresByKind[r.error_kind] ?? 0) + 1;
+  const durations = okRows.map((r) => r.duration_ms).sort((a, b) => a - b);
+  const tokRows = okRows.filter((r) => r.completion_tokens !== null);
+  const tokSum = tokRows.reduce((n, r) => n + (r.completion_tokens ?? 0), 0);
+  const tokMs = tokRows.reduce((n, r) => n + r.duration_ms, 0);
+  const times = rows.map((r) => r.started_at).sort();
+  return {
+    calls: counted.length,
+    failures: counted.length - okRows.length,
+    failuresByKind,
+    aborted: rows.length - counted.length,
+    avgMs: durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null,
+    p90Ms: durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * 0.9))] : null,
+    tokensPerSec: tokMs > 0 ? (tokSum / tokMs) * 1000 : null,
+    avgCompletionTokens: tokRows.length ? tokSum / tokRows.length : null,
+    firstAt: times[0] ?? null,
+    lastAt: times[times.length - 1] ?? null,
+  };
+}
+
+function groupBy<T>(list: T[], key: (x: T) => string): Map<string, T[]> {
+  const m = new Map<string, T[]>();
+  for (const x of list) {
+    const k = key(x);
+    m.set(k, [...(m.get(k) ?? []), x]);
+  }
+  return m;
+}
+
+/** AI の性能の集計。since（ISO 日時）以降の記録だけを対象にする（null ならすべて） */
+export function aiStats(since: string | null): AiStats {
+  const d = db();
+  const calls = d
+    .prepare(
+      `SELECT kind, model, prompt_version, ext, started_at, duration_ms, completion_tokens, ok, error_kind
+         FROM ai_calls WHERE started_at >= ? ORDER BY started_at`,
+    )
+    .all(since ?? "") as CallRow[];
+
+  const byKind = [...groupBy(calls, (r) => r.kind)].map(([kind, rows]) => ({
+    kind: kind as CallKind,
+    model: null,
+    promptVersion: "",
+    ...summarize(rows),
+  }));
+  const byVersion = [...groupBy(calls, (r) => `${r.kind}\t${r.model ?? ""}\t${r.prompt_version}`)]
+    .map(([, rows]) => ({ kind: rows[0].kind, model: rows[0].model, promptVersion: rows[0].prompt_version, ...summarize(rows) }))
+    .sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? ""));
+  const byExt = [...groupBy(calls.filter((r) => r.error_kind !== "aborted"), (r) => `${r.kind}\t${r.ext ?? ""}`)]
+    .map(([, rows]) => ({ kind: rows[0].kind, ext: rows[0].ext ?? "", calls: rows.length, avgMs: summarize(rows).avgMs }))
+    .sort((a, b) => b.calls - a.calls);
+
+  const fileRows = d
+    .prepare(
+      `SELECT rule_level, ai_ok, ai_risk, final_recommendation, names_ai, names_layout, names_both,
+              readings_ai, readings_layout, readings_both
+         FROM ai_file_stats WHERE created_at >= ?`,
+    )
+    .all(since ?? "") as {
+    rule_level: string;
+    ai_ok: number;
+    ai_risk: string | null;
+    final_recommendation: string | null;
+    names_ai: number;
+    names_layout: number;
+    names_both: number;
+    readings_ai: number;
+    readings_layout: number;
+    readings_both: number;
+  }[];
+  const levels = ["high", "medium", "low", "none"];
+  const riskMatrix = Object.fromEntries(levels.map((r) => [r, Object.fromEntries(levels.map((a) => [a, 0]))])) as Record<
+    string,
+    Record<string, number>
+  >;
+  let lower = 0;
+  let higher = 0;
+  const recommendations: Record<string, number> = {};
+  const names = { ai: 0, layout: 0, both: 0, aiOnlyFiles: 0 };
+  const readings = { ai: 0, layout: 0, both: 0 };
+  for (const f of fileRows) {
+    if (f.ai_ok && f.ai_risk && riskMatrix[f.rule_level]) {
+      riskMatrix[f.rule_level][f.ai_risk] = (riskMatrix[f.rule_level][f.ai_risk] ?? 0) + 1;
+      if (RANK[f.ai_risk] < RANK[f.rule_level]) lower++;
+      if (RANK[f.ai_risk] > RANK[f.rule_level]) higher++;
+    }
+    if (f.final_recommendation) recommendations[f.final_recommendation] = (recommendations[f.final_recommendation] ?? 0) + 1;
+    names.ai += f.names_ai;
+    names.layout += f.names_layout;
+    names.both += f.names_both;
+    if (f.names_ai > 0 && f.names_layout === 0) names.aiOnlyFiles++;
+    readings.ai += f.readings_ai;
+    readings.layout += f.readings_layout;
+    readings.both += f.readings_both;
+  }
+
+  return {
+    since,
+    byKind,
+    byVersion,
+    byExt,
+    files: {
+      total: fileRows.length,
+      aiFailed: fileRows.filter((f) => !f.ai_ok).length,
+      riskMatrix,
+      aiLowerThanRule: lower,
+      aiHigherThanRule: higher,
+      recommendations,
+      names,
+      readings,
+    },
+  };
+}

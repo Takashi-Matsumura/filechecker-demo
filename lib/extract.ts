@@ -2,6 +2,7 @@ import { unzipSync, strFromU8 } from "fflate";
 import { config } from "./config";
 import { probeImageSize } from "./image-size";
 import { ocrImage } from "./llm";
+import type { CallContext } from "./metrics";
 
 /** 安全上の上限に引っかかったことを表す（ファイルは「内容未検査」として扱う） */
 export class ExtractLimitError extends Error {}
@@ -201,7 +202,7 @@ function unpdf() {
   return pdfjsReady;
 }
 
-async function extractPdf(buf: Buffer, signal?: AbortSignal, allowOcr = true): Promise<Extracted> {
+async function extractPdf(buf: Buffer, signal?: AbortSignal, allowOcr = true, ctx?: CallContext): Promise<Extracted> {
   const { getDocumentProxy, extractText, renderPageAsImage } = await unpdf();
   const doc = await getDocumentProxy(new Uint8Array(buf));
   const { text, totalPages } = await extractText(doc, { mergePages: false });
@@ -222,7 +223,7 @@ async function extractPdf(buf: Buffer, signal?: AbortSignal, allowOcr = true): P
       canvasImport: () => import("@napi-rs/canvas"),
       scale,
     });
-    out.push(await ocrImage(await toJpeg(png), signal));
+    out.push(await ocrImage(await toJpeg(png), signal, ctx));
   }
   return {
     text: out.join("\n"),
@@ -236,18 +237,26 @@ async function extractPdf(buf: Buffer, signal?: AbortSignal, allowOcr = true): P
 export interface ExtractOptions {
   /** false のとき OCR（AI による画像の読み取り）を行わない。時間がかかる処理を避けたい場面用 */
   allowOcr?: boolean;
+  /** 性能分析の記録に残す、どの棚卸しのどのファイルの処理か */
+  ctx?: CallContext;
 }
 
 export async function extract(buf: Buffer, ext: string, signal?: AbortSignal, opts: ExtractOptions = {}): Promise<Extracted> {
   try {
-    return await extractInner(buf, ext, signal, opts.allowOcr ?? true);
+    return await extractInner(buf, ext, signal, opts.allowOcr ?? true, opts.ctx);
   } catch (e) {
     if (e instanceof ExtractLimitError) return { text: "", method: "none", note: e.message };
     throw e;
   }
 }
 
-async function extractInner(buf: Buffer, ext: string, signal: AbortSignal | undefined, allowOcr: boolean): Promise<Extracted> {
+async function extractInner(
+  buf: Buffer,
+  ext: string,
+  signal: AbortSignal | undefined,
+  allowOcr: boolean,
+  ctx?: CallContext,
+): Promise<Extracted> {
   const kind = kindOf(ext);
   let r: Extracted;
   switch (kind) {
@@ -259,11 +268,11 @@ async function extractInner(buf: Buffer, ext: string, signal: AbortSignal | unde
       r = { text: extractOffice(buf, ext), method: "office" };
       break;
     case "pdf":
-      r = await extractPdf(buf, signal, allowOcr);
+      r = await extractPdf(buf, signal, allowOcr, ctx);
       break;
     case "image":
       if (!allowOcr) return { text: "", method: "none", note: "画像のため OCR が必要です" };
-      r = { text: await ocrImage(await toJpeg(buf), signal), method: "ocr" };
+      r = { text: await ocrImage(await toJpeg(buf), signal, ctx), method: "ocr" };
       break;
     default:
       return { text: "", method: "none", note: "未対応の形式（メタ情報のみ）" };

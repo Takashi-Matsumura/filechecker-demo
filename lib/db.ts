@@ -53,6 +53,48 @@ function open(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS idx_files_scan ON files(scan_id);
   `);
+  // AI の性能分析用の記録（本文は保存しない）。棚卸しの記録とは切り離してためる
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_calls (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      scan_id           INTEGER,
+      file_id           INTEGER,
+      ext               TEXT,
+      kind              TEXT NOT NULL,          -- ocr | judge
+      model             TEXT,
+      prompt_version    TEXT NOT NULL,
+      started_at        TEXT NOT NULL,
+      duration_ms       INTEGER NOT NULL,
+      prompt_tokens     INTEGER,
+      completion_tokens INTEGER,
+      ok                INTEGER NOT NULL,
+      error_kind        TEXT,                   -- timeout | http | network | parse | aborted
+      input_chars       INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_calls_started ON ai_calls(started_at);
+    CREATE TABLE IF NOT EXISTS ai_file_stats (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      scan_id              INTEGER NOT NULL,
+      file_id              INTEGER NOT NULL,
+      ext                  TEXT,
+      extract_method       TEXT,
+      rule_level           TEXT,
+      ai_ok                INTEGER NOT NULL,
+      ai_risk              TEXT,
+      final_risk           TEXT,
+      ai_recommendation    TEXT,
+      final_recommendation TEXT,
+      names_ai             INTEGER NOT NULL DEFAULT 0,
+      names_layout         INTEGER NOT NULL DEFAULT 0,
+      names_both           INTEGER NOT NULL DEFAULT 0,
+      readings_ai          INTEGER NOT NULL DEFAULT 0,
+      readings_layout      INTEGER NOT NULL DEFAULT 0,
+      readings_both        INTEGER NOT NULL DEFAULT 0,
+      finding_types        TEXT,
+      prompt_version       TEXT,
+      created_at           TEXT NOT NULL
+    );
+  `);
   // 後から追加した列のマイグレーション
   const cols = db.prepare(`PRAGMA table_info(scans)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === "runner_pid")) db.exec(`ALTER TABLE scans ADD COLUMN runner_pid INTEGER`);
