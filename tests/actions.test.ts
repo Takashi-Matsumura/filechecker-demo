@@ -40,6 +40,11 @@ describe("bucketOf", () => {
     assert.equal(bucketOf(file({ extract_method: "none", dup_of: 3 })), "check");
     assert.deepEqual(reasonTags(file({ status: "error" })).at(-1), "読み込みエラー");
   });
+  it("AI が「保管」と答えても、リスクが中以上なら やること から外さない", () => {
+    assert.equal(bucketOf(file({ risk: "high", ai: { recommendation: "keep" } })), "move");
+    assert.equal(bucketOf(file({ risk: "medium", ai: { recommendation: "keep" } })), "check");
+    assert.equal(bucketOf(file({ risk: "low", ai: { recommendation: "keep" } })), "ok");
+  });
   it("AI の判定がなければルールの結果から決める", () => {
     assert.equal(bucketOf(file({ dup_of: 2 })), "remove");
     assert.equal(bucketOf(file({ risk: "high" })), "move");

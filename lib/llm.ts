@@ -63,6 +63,18 @@ function release() {
   waiters.shift()?.();
 }
 
+/** llama-server のエラー応答（{"error":{"message":…}}）の message を短く取り出す。読めなければ空 */
+async function llmErrorMessage(res: Response): Promise<string> {
+  try {
+    const j = (await res.json()) as { error?: { message?: unknown } };
+    const msg = typeof j.error?.message === "string" ? j.error.message : "";
+    // 本文の引用を含まない、短い定型の説明だけを想定している。長いものは切る
+    return msg ? `: ${msg.slice(0, 80)}` : "";
+  } catch {
+    return "";
+  }
+}
+
 async function chat(system: string, user: Content, opts: ChatOptions): Promise<ChatResult> {
   opts.signal?.throwIfAborted();
   await acquire();
@@ -113,7 +125,8 @@ async function chat(system: string, user: Content, opts: ChatOptions): Promise<C
         ? AbortSignal.any([opts.signal, AbortSignal.timeout(config.llmTimeoutMs)])
         : AbortSignal.timeout(config.llmTimeoutMs),
     });
-    if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    // 応答本文は保存先（画面・DB）に入ってもよい形に限る。llama-server のエラーの message だけを短く添える
+    if (!res.ok) throw new Error(`LLM HTTP ${res.status}${await llmErrorMessage(res)}`);
     const json = (await res.json()) as {
       model?: string;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
@@ -261,11 +274,53 @@ ${input.text || "（本文なし）"}
     track: { kind: "judge", version: JUDGE_VERSION, ctx, inputChars: input.text.length },
   });
   try {
-    return JSON.parse(r.content) as AiJudgement;
+    return parseJudgement(r.content);
   } catch (e) {
     markParseError(r.callId);
     throw e;
   }
+}
+
+/**
+ * AI の応答を読む。JSON でない応答のエラー文には応答の先頭（氏名を含みうる）がそのまま入るので、
+ * 中身を含まない文面に置き換える（エラーは画面と DB に残るため）。
+ */
+function parseJson(content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch {
+    throw new Error("AI の応答を JSON として読み取れませんでした");
+  }
+}
+
+const RISKS = ["high", "medium", "low", "none"] as const;
+const RECS = ["keep", "restrict", "archive", "delete", "review"] as const;
+const str = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : "");
+const strList = (v: unknown, max: number) =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map((x) => x.slice(0, max)) : [];
+
+/**
+ * 判定の応答を、出力形式（JUDGE_SCHEMA）どおりかを確かめながら読む。
+ * llama-server は形式を守らせるが、守られなかった場合に想定外の値で後の処理が誤動作しないよう、
+ * リスクと推奨が決められた値でなければ失敗として扱う（ルールの結果から推定する経路に回る）。
+ */
+export function parseJudgement(content: string): AiJudgement {
+  const v = parseJson(content) as Record<string, unknown> | null;
+  if (!v || typeof v !== "object") throw new Error("AI の応答の形式が想定と異なります");
+  const risk = RISKS.find((x) => x === v.risk);
+  const recommendation = RECS.find((x) => x === v.recommendation);
+  if (!risk || !recommendation) throw new Error("AI の応答のリスクまたは推奨が想定外の値です");
+  return {
+    summary: str(v.summary, 200),
+    category: str(v.category, 40) || "その他",
+    contains_personal_info: v.contains_personal_info === true,
+    contains_confidential: v.contains_confidential === true,
+    risk,
+    recommendation,
+    reason: str(v.reason, 200),
+    person_names: strList(v.person_names, 100),
+    name_readings: strList(v.name_readings, 100),
+  };
 }
 
 // ---------------------------------------------------------------- 氏名の補完
@@ -318,8 +373,8 @@ ${text}
     track: { kind: "names", version: NAMES_VERSION, ctx, inputChars: text.length },
   });
   try {
-    const v = JSON.parse(r.content) as { person_names?: string[]; name_readings?: string[] };
-    return { person_names: v.person_names ?? [], name_readings: v.name_readings ?? [] };
+    const v = parseJson(r.content) as { person_names?: unknown; name_readings?: unknown } | null;
+    return { person_names: strList(v?.person_names, 100), name_readings: strList(v?.name_readings, 100) };
   } catch (e) {
     markParseError(r.callId);
     throw e;

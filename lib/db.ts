@@ -11,9 +11,26 @@ import { config } from "./config";
 
 const globalForDb = globalThis as unknown as { __fcDb?: DatabaseSync };
 
+/**
+ * DB ファイル（と WAL の付随ファイル）を本人だけが読み書きできる権限にする。SQLite は WAL の付随ファイルを
+ * DB ファイルと同じ権限で作るので、DB ファイルを先に絞っておけばよい。Windows では権限の仕組みが違うので何もしない
+ */
+function restrictPermissions(dbPath: string) {
+  if (process.platform === "win32") return;
+  for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      fs.chmodSync(f, 0o600);
+    } catch {
+      // 付随ファイルがまだ無い場合など。権限を絞れなくても動作は続ける
+    }
+  }
+}
+
 function open(): DatabaseSync {
-  fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
+  // 保存先は、同じPCの他のユーザから読めないようにする（中身は伏せてあるが、パスや検出の結果は残る）
+  fs.mkdirSync(path.dirname(config.dbPath), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(config.dbPath);
+  restrictPermissions(config.dbPath);
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;

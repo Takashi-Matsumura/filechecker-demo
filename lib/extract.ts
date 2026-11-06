@@ -60,10 +60,22 @@ function decodeXml(s: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]{1,8});/gi, (_, h) => codePoint(parseInt(h, 16)))
+    .replace(/&#(\d{1,10});/g, (_, d) => codePoint(Number(d)))
     .replace(/&amp;/g, "&");
 }
+
+/** 文字参照の値を文字にする。範囲外の値（&#x110000; など）で例外にせず、置換文字にする */
+function codePoint(n: number): string {
+  return n <= 0x10ffff ? String.fromCodePoint(n) : "\ufffd";
+}
+
+/*
+ * XML を読む正規表現は、必ず線形時間で終わる形にする。
+ * 属性の部分を [^>]* と書くと、> のない `<w:t a<w:t a…` の繰り返しで開始位置ごとに末尾まで読み直し、
+ * 処理時間が長さの二乗で増える（ZIP はよく圧縮できるので、小さなファイルが展開の上限まで膨らむ）。
+ * 属性は [^<>]* に限り、次のタグの手前で必ず止まるようにする。
+ */
 
 /** <w:p> / <a:p> を改行、<w:t> / <a:t> の中身を連結 */
 function paragraphsText(xml: string, ns: "w" | "a"): string {
@@ -71,7 +83,7 @@ function paragraphsText(xml: string, ns: "w" | "a"): string {
     .split(new RegExp(`</${ns}:p>`))
     .map((p) => {
       const parts: string[] = [];
-      const re = new RegExp(`<${ns}:t(?:\\s[^>]*)?>([^<]*)</${ns}:t>|<${ns}:tab/>`, "g");
+      const re = new RegExp(`<${ns}:t(?:\\s[^<>]*)?>([^<]*)</${ns}:t>|<${ns}:tab/>`, "g");
       let m: RegExpExecArray | null;
       while ((m = re.exec(p))) parts.push(m[1] === undefined ? "\t" : decodeXml(m[1]));
       return parts.join("");
@@ -127,7 +139,7 @@ function extractOffice(buf: Buffer, ext: string): string {
   const shared: string[] = [];
   const sst = read("xl/sharedStrings.xml");
   for (const si of sst.split("</si>")) {
-    const ts = [...si.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1]));
+    const ts = [...si.matchAll(/<t(?:\s[^<>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1]));
     if (si.includes("<si")) shared.push(ts.join(""));
   }
   const sheets = names.filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort(byNumber);
@@ -135,14 +147,16 @@ function extractOffice(buf: Buffer, ext: string): string {
   for (const s of sheets) {
     for (const row of read(s).split("</row>")) {
       const cells: string[] = [];
-      for (const c of row.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      // セルの中身は、次のセル（<c …>）が始まる手前までに限る。閉じタグのないセルが続いても、
+      // 開始位置ごとに行末まで読み直さない
+      for (const c of row.matchAll(/<c\b([^<>]*?)(?:\/>|>((?:(?!<c[\s>/])[\s\S])*?)<\/c>)/g)) {
         const attrs = c[1];
         const inner = c[2] ?? "";
         const t = attrs.match(/\bt="(\w+)"/)?.[1];
         const v = inner.match(/<v>([^<]*)<\/v>/)?.[1];
         let value: string | undefined;
         if (t === "s" && v !== undefined) value = shared[Number(v)] ?? "";
-        else if (t === "inlineStr") value = [...inner.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1])).join("");
+        else if (t === "inlineStr") value = [...inner.matchAll(/<t(?:\s[^<>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1])).join("");
         else if (v !== undefined) value = decodeXml(v);
         if (value === undefined) continue;
         // セルの位置（C5 の「C」）どおりに並べる。空のセルを詰めると、行ごとに列がずれて
