@@ -134,16 +134,23 @@ def license_image(p) -> Image.Image:
     d = ImageDraw.Draw(img)
     d.rectangle([0, 0, w - 1, h - 1], outline=(80, 120, 80), width=8)
     d.text((40, 40), "運転免許証（見本・架空）", font=font(40, True), fill=(30, 60, 30))
+    photo_left = w - 300
+    # 長い住所は写真の枠の手前で折り返す（枠の下に文字が隠れると、正解の文字が画像から読めなくなるため）
+    address = f"住所  {p[2]}"
+    address_lines = [address]
+    if d.textlength(address, font=font(30)) > photo_left - 40 - 20 and " " in p[2]:
+        head, tail = p[2].rsplit(" ", 1)
+        address_lines = [f"住所  {head}", f"　　  {tail}"]
     lines = [
         f"氏名  {p[0]}",
         "生年月日  昭和60年 5月 20日生",
-        f"住所  {p[2]}",
+        *address_lines,
         "交付  令和 5年 6月 1日",
         "番号  第 123456789012 号",
     ]
     for i, t in enumerate(lines):
         d.text((40, 130 + i * 70), t, font=font(30), fill=(20, 20, 20))
-    d.rectangle([w - 300, 130, w - 50, 450], fill=(200, 205, 210), outline=(90, 90, 90), width=3)
+    d.rectangle([photo_left, 130, w - 50, 450], fill=(200, 205, 210), outline=(90, 90, 90), width=3)
     d.text((w - 175, 290), "写真", font=font(36), fill=(90, 90, 90), anchor="mm")
     return scanned_look(img, -1.2)
 
