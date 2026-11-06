@@ -34,6 +34,18 @@ export function TextPreview({ scanId, fileId, excerpt }: { scanId: string; fileI
   const [failed, setFailed] = useState(false);
   const [active, setActive] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const scrolled = useRef(false);
+
+  // URL の末尾が #preview なら（やること画面のプレビューのアイコンから来たとき）、
+  // 読み込みが終わって高さが決まってから、プレビューの位置までスクロールする（1回だけ）
+  useEffect(() => {
+    if (scrolled.current || (!preview && !failed)) return;
+    if (window.location.hash !== "#preview") return;
+    scrolled.current = true;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    sectionRef.current?.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+  }, [preview, failed]);
 
   useEffect(() => {
     let alive = true;
@@ -87,7 +99,7 @@ export function TextPreview({ scanId, fileId, excerpt }: { scanId: string; fileI
   }
 
   return (
-    <section className="rounded-xl border border-stone-200 bg-white p-5">
+    <section id="preview" ref={sectionRef} className="scroll-mt-4 rounded-xl border border-stone-200 bg-white p-5">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">内容のプレビュー</h2>
         <span className="text-xs text-stone-400">
