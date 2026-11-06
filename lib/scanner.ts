@@ -164,10 +164,15 @@ interface Entry {
   rel: string;
 }
 
-async function walk(root: string, signal: AbortSignal): Promise<Entry[]> {
+/**
+ * 棚卸しするファイルの一覧を作る。上限（config.maxFiles）に達したら打ち切る。
+ * truncated は、上限を超えるファイルが実際にあったか（棚卸ししていないファイルが残っているか）。
+ */
+async function walk(root: string, signal: AbortSignal): Promise<{ entries: Entry[]; truncated: boolean }> {
   const out: Entry[] = [];
+  let truncated = false;
   async function rec(dir: string) {
-    if (out.length >= config.maxFiles) return;
+    if (truncated) return;
     signal.throwIfAborted();
     let entries;
     try {
@@ -177,16 +182,20 @@ async function walk(root: string, signal: AbortSignal): Promise<Entry[]> {
     }
     entries.sort((a, b) => a.name.localeCompare(b.name, "ja"));
     for (const e of entries) {
-      if (out.length >= config.maxFiles) return;
+      if (truncated) return;
       if (e.name.startsWith(".") || e.name === "node_modules") continue;
       const abs = path.join(dir, e.name);
       // シンボリックリンクは辿らない（許可ルートの外に出ないため）
       if (e.isDirectory()) await rec(abs);
-      else if (e.isFile()) out.push({ abs, rel: path.relative(root, abs) });
+      else if (e.isFile()) {
+        // 上限に達したあとに、まだファイルが見つかった = 棚卸ししきれないファイルがある
+        if (out.length >= config.maxFiles) truncated = true;
+        else out.push({ abs, rel: path.relative(root, abs) });
+      }
     }
   }
   await rec(root);
-  return out;
+  return { entries: out, truncated };
 }
 
 async function sha256(file: string): Promise<string> {
@@ -205,7 +214,7 @@ async function buildFileList(scanId: number, root: string, signal: AbortSignal) 
   const d = db();
   d.prepare(`UPDATE scans SET status='walking' WHERE id=? AND status<>'pausing'`).run(scanId);
   d.prepare(`DELETE FROM files WHERE scan_id=?`).run(scanId);
-  const entries = await walk(root, signal);
+  const { entries, truncated } = await walk(root, signal);
 
   const staleBefore = new Date();
   staleBefore.setFullYear(staleBefore.getFullYear() - config.staleYears);
@@ -239,7 +248,7 @@ async function buildFileList(scanId: number, root: string, signal: AbortSignal) 
     list.sort((a, b) => a.mtime - b.mtime || a.rel.length - b.rel.length);
     for (const dup of list.slice(1)) setDup.run(list[0].id, dup.id);
   }
-  d.prepare(`UPDATE scans SET walked=1, total=? WHERE id=?`).run(entries.length, scanId);
+  d.prepare(`UPDATE scans SET walked=1, total=?, truncated=? WHERE id=?`).run(entries.length, truncated ? 1 : 0, scanId);
 }
 
 async function runScan(scanId: number, root: string, signal: AbortSignal) {
@@ -469,6 +478,8 @@ export interface ScanRow {
   processed: number;
   error: string | null;
   runner_pid: number | null;
+  /** 1 = ファイル数の上限に達し、棚卸ししていないファイルが残っている */
+  truncated: number;
   created_at: string;
   finished_at: string | null;
 }

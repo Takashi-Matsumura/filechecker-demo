@@ -158,6 +158,16 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
         {scan.status === "error" && (
           <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">エラー: {scan.error}</p>
         )}
+        {!!scan.truncated && (
+          <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-semibold">ファイルが多いため、すべては棚卸ししていません</p>
+            <p className="mt-1 text-xs leading-relaxed">
+              このフォルダには、一度に棚卸しできる上限を超えるファイルがあります。フォルダ名の順で先頭の
+              <span className="mx-0.5 font-semibold tabular-nums">{scan.total.toLocaleString()}</span>
+              件だけを棚卸しし、残りのファイルは見ていません。「対応が必要なファイルはありません」と出ていても、残りに問題のあるファイルがあるかもしれません。中のフォルダを1つずつ指定して、分けて棚卸ししてください。
+            </p>
+          </div>
+        )}
 
         <div role="tablist" className="flex gap-1 border-b border-stone-200">
           {(
