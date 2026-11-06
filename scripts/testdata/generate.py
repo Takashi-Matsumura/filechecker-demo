@@ -387,6 +387,11 @@ _GIVEN = ["直樹", "真理", "翔太", "恵子", "拓也", "智子", "亮", "�
 MEETING_PEOPLE = [f"{a} {b}" for a, b in zip(_SURNAMES, _GIVEN)]
 
 
+def fullwidth_digits(s: str) -> str:
+    """半角の数字とハイフンを全角にする（名簿や手入力で全角になっている番号を再現する）。"""
+    return s.translate(str.maketrans("0123456789-", "０１２３４５６７８９－"))
+
+
 def degrade(img: Image.Image, angle: float, blur: float, contrast: float, scale: float) -> Image.Image:
     """かすれたスキャン: 大きな傾き・強いぼかし・薄いコントラスト・解像度の低下・ノイズ。"""
     img = img.rotate(angle, resample=Image.BICUBIC, expand=False, fillcolor=(236, 234, 226))
@@ -503,6 +508,15 @@ def generate_hard(out: Path) -> list[tuple[str, str]]:
     ], "※取扱注意", angle=-1.0)
     cover.save(p, "PDF", resolution=150, save_all=True, append_images=[form])
 
+    x = HARD_PEOPLE[2]
+    p = add("申込内容_全角.txt", "全角で書かれた番号: 個人番号・カード番号・口座番号")
+    p.write_text(
+        "お申し込み内容（控え）\n"
+        f"氏名：{x[0]}\n"
+        f"個人番号：{fullwidth_digits(' '.join([x[6][:4], x[6][4:8], x[6][8:]]))}\n"
+        f"お支払いカード：{fullwidth_digits(TEST_CARDS[2]).replace(' ', '－')}\n"
+        f"振込口座：サンプル銀行　本店　普通　{fullwidth_digits('2468013')}\n", encoding="utf-8")
+
     p = add("番号っぽいが個人情報ではない.txt", "紛らわしい番号（チェックデジットが合わない）: 個人情報なし")
     p.write_text(
         "出荷管理メモ\n"
@@ -544,6 +558,10 @@ def expected_hard() -> dict[str, dict]:
                             "secrets": [hp[5][4]],
                             "risk": ["high"], "recommendation": ["restrict"],
                             "ocr": [hp[5][0], hp[5][6], hp[5][2], hp[5][4]]},
+        "申込内容_全角.txt": {"types": ["mynumber", "credit_card", "bank_account"], "names": [hp[2][0]], "readings": [],
+                          "risk": ["high"], "recommendation": ["restrict"],
+                          "secrets": [fullwidth_digits(" ".join([hp[2][6][:4], hp[2][6][4:8], hp[2][6][8:]])),
+                                      fullwidth_digits(TEST_CARDS[2]).replace(" ", "－"), fullwidth_digits("2468013")]},
         "番号っぽいが個人情報ではない.txt": {"types": [], "names": [], "readings": [], "risk": ["none", "low"],
                                     "recommendation": ["keep", "archive", "review"]},
     }

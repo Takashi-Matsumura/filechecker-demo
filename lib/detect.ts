@@ -127,20 +127,27 @@ interface Rule {
   mask: (s: string) => string;
 }
 
+/** 番号の数字（半角・全角）と区切り（空白・ハイフン類・長音記号。全角を含む） */
+const ND = "[0-9０-９]";
+const NS = "[\\s　\\-－‐−ー]";
+/** 番号から数字だけを取り出す（全角の数字は半角にそろえる。チェックデジットなどの検査用） */
+const digitsOf = (s: string) => s.normalize("NFKC").replace(/\D/g, "");
+
 const RULES: Rule[] = [
   {
     type: "mynumber",
     level: "high",
-    re: /(?<!\d[\s-]?)\d{4}[\s-]?\d{4}[\s-]?\d{4}(?![\s-]?\d)/g,
-    accept: (m) => isValidMyNumber(m[0].replace(/\D/g, "")),
+    // 名簿や手入力では全角で書かれることがあるので、全角の数字・区切りも受け付ける（電話番号と同じ）
+    re: new RegExp(`(?<!${ND}${NS}?)${ND}{4}${NS}?${ND}{4}${NS}?${ND}{4}(?!${NS}?${ND})`, "g"),
+    accept: (m) => isValidMyNumber(digitsOf(m[0])),
     mask: (s) => maskDigitsKeepLast(s, 0),
   },
   {
     type: "credit_card",
     level: "high",
-    re: /(?<!\d[\s-]?)[3-6](?:\d[\s-]?){12,17}\d(?![\s-]?\d)/g,
+    re: new RegExp(`(?<!${ND}${NS}?)[3-6３-６](?:${ND}${NS}?){12,17}${ND}(?!${NS}?${ND})`, "g"),
     accept: (m) => {
-      const d = m[0].replace(/\D/g, "");
+      const d = digitsOf(m[0]);
       return d.length >= 14 && d.length <= 16 && isLuhn(d);
     },
     mask: (s) => maskDigitsKeepLast(s, 4),
@@ -148,7 +155,7 @@ const RULES: Rule[] = [
   {
     type: "bank_account",
     level: "high",
-    re: /(?:普通|当座|口座番号?)[\s:：,]*\d{7}(?!\d)/g,
+    re: new RegExp(`(?:普通|当座|口座番号?)[\\s　:：,，]*${ND}{7}(?!${ND})`, "g"),
     mask: (s) => maskDigitsKeepLast(s, 0),
   },
   {

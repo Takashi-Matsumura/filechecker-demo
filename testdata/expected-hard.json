@@ -206,6 +206,28 @@
       "070-3344-5566"
     ]
   },
+  "申込内容_全角.txt": {
+    "types": [
+      "mynumber",
+      "credit_card",
+      "bank_account"
+    ],
+    "names": [
+      "石井 誠"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ],
+    "secrets": [
+      "８９０１ ２３４５ ６７８０",
+      "３５３０－１１１３－３３３０－００００",
+      "２４６８０１３"
+    ]
+  },
   "番号っぽいが個人情報ではない.txt": {
     "types": [],
     "names": [],
