@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
 import { JUDGE_VERSION } from "@/lib/llm";
-import { aiStats, judgeVersions } from "@/lib/metrics";
+import { aiStats, judgeVersions, scanOptions } from "@/lib/metrics";
 
 /**
- * AI の性能の集計。?days=7|30|all（既定は all）、?version=判定の指示文の版（8桁の16進。既定はすべて）
- * あわせて、絞り込みの選択肢（版の一覧）と、今使っている判定の版を返す。
+ * AI の性能の集計。?days=7|30|all（既定は all）、?version=判定の指示文の版（8桁の16進。既定はすべて）、
+ * ?scan=棚卸しの番号（既定はすべて）。あわせて、絞り込みの選択肢（版・棚卸しの一覧）と、今使っている判定の版を返す。
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -13,8 +13,10 @@ export async function GET(req: NextRequest) {
   const since = n ? new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString() : null;
   const v = sp.get("version");
   const version = v && /^[0-9a-f]{8}$/.test(v) ? v : null;
+  const sc = Number(sp.get("scan"));
+  const scanId = Number.isInteger(sc) && sc > 0 ? sc : null;
   return Response.json(
-    { ...aiStats(since, version), versions: judgeVersions(), currentVersion: JUDGE_VERSION },
+    { ...aiStats(since, version, scanId), versions: judgeVersions(), scans: scanOptions(), currentVersion: JUDGE_VERSION },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

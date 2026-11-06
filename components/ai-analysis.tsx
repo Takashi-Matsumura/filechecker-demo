@@ -1,13 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AiStats, CallSummary, Counts, FeedbackSummary, JudgeVersion } from "@/lib/metrics";
+import type { AiStats, CallSummary, Counts, FeedbackSummary, JudgeVersion, ScanOption } from "@/lib/metrics";
 import { BUCKET_ORDER, BUCKETS } from "./actions";
 import { BackLink } from "./back-link";
 import { RECOMMENDATION, RISK, type Level } from "./labels";
 
 type Period = "all" | "30" | "7";
-type StatsResponse = AiStats & { versions: JudgeVersion[]; currentVersion: string };
+type StatsResponse = AiStats & { versions: JudgeVersion[]; scans: ScanOption[]; currentVersion: string };
+
+/** 棚卸しの選択肢の表示（例: #42 sample-files 11/6 19:42・21件） */
+function scanLabel(s: ScanOption): string {
+  if (!s.root) return `#${s.id}（削除済み）・AI ${s.calls}回`;
+  const folder = s.root.split(/[\\/]/).filter(Boolean).pop() ?? s.root;
+  return `#${s.id} ${folder} ${date(s.createdAt)}・${s.total ?? "?"}件`;
+}
 
 const PERIODS: { key: Period; label: string }[] = [
   { key: "all", label: "すべて" },
@@ -36,12 +43,15 @@ export function AiAnalysis() {
   const [period, setPeriod] = useState<Period>("all");
   // 判定の指示文の版（空 = すべて）
   const [version, setVersion] = useState("");
+  // 棚卸しの番号（空 = すべて）
+  const [scan, setScan] = useState("");
   const [stats, setStats] = useState<StatsResponse | null>(null);
 
   useEffect(() => {
     let stop = false;
     const params = new URLSearchParams({ days: period });
     if (version) params.set("version", version);
+    if (scan) params.set("scan", scan);
     fetch(`/api/ai-stats?${params}`)
       .then((r) => (r.ok ? (r.json() as Promise<StatsResponse>) : null))
       .then((s) => !stop && s && setStats(s))
@@ -49,7 +59,7 @@ export function AiAnalysis() {
     return () => {
       stop = true;
     };
-  }, [period, version]);
+  }, [period, version, scan]);
 
   return (
     <div className="space-y-8">
@@ -64,6 +74,21 @@ export function AiAnalysis() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-stone-600">
+            棚卸し
+            <select
+              value={scan}
+              onChange={(e) => setScan(e.target.value)}
+              className="max-w-[16rem] rounded-md border border-stone-300 bg-white px-2 py-1 text-xs text-stone-800 focus:border-teal-600 focus:outline-none"
+            >
+              <option value="">すべて</option>
+              {stats?.scans.map((sc) => (
+                <option key={sc.id} value={String(sc.id)}>
+                  {scanLabel(sc)}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="flex items-center gap-2 text-xs text-stone-600">
             判定の指示文の版
             <select
@@ -97,11 +122,20 @@ export function AiAnalysis() {
           </div>
         </div>
       </div>
-      {version && stats && (
-        <p className="-mt-4 rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-900 ring-1 ring-teal-200">
-          判定の指示文の版 <span className="font-mono font-semibold">{version}</span>
-          {version === stats.currentVersion ? "（現在の版）" : ""} で処理した記録だけを表示しています。文字の読み取りと氏名の補完は、この版で判定したファイルの処理だけを数えています。
-        </p>
+      {(version || scan) && stats && (
+        <div className="-mt-4 space-y-1 rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-900 ring-1 ring-teal-200">
+          {scan && (
+            <p>
+              棚卸し <span className="font-semibold">#{scan}</span> の記録だけを表示しています。テストデータでの評価は棚卸しに属さないので表示しません。
+            </p>
+          )}
+          {version && (
+            <p>
+              判定の指示文の版 <span className="font-mono font-semibold">{version}</span>
+              {version === stats.currentVersion ? "（現在の版）" : ""} で処理した記録だけを表示しています。文字の読み取りと氏名の補完は、この版で判定したファイルの処理だけを数えています。
+            </p>
+          )}
+        </div>
       )}
 
       {!stats ? (
@@ -114,7 +148,7 @@ export function AiAnalysis() {
         <>
           <Speed stats={stats} />
           <Versions rows={stats.byVersion} />
-          <Evals stats={stats} />
+          <Evals stats={stats} scanned={!!scan} />
           <Judgements stats={stats} />
           <Feedback stats={stats} />
           <ByExt stats={stats} />
@@ -308,13 +342,15 @@ function RecallPrecision({ c }: { c: Counts }) {
 }
 
 /** テストデータの正解を使った評価（npm run eval）の履歴 */
-function Evals({ stats }: { stats: AiStats }) {
+function Evals({ stats, scanned }: { stats: AiStats; scanned: boolean }) {
   return (
     <Card
       title="テストデータでの評価"
       note="テストデータ（すべて架空）の正解と比べた結果です。「標準」はデモ用のサンプル、「難しい」は画像の劣化・表の崩れ・上限を超える人数などを集めたものです。モデルや指示文を変えたら npm run eval で評価し、同じ物差しで比べられます（期間の絞り込みは効きません）。氏名・読み仮名・ルール検出は「拾えた割合 / 拾ったものが正しい割合」です。"
     >
-      {stats.evals.length === 0 ? (
+      {scanned ? (
+        <p className="text-sm text-stone-400">棚卸しで絞り込んでいる間は、テストデータでの評価を表示しません（評価はどの棚卸しにも属さないため）。</p>
+      ) : stats.evals.length === 0 ? (
         <p className="text-sm text-stone-400">
           まだ評価していません。<code className="rounded bg-stone-100 px-1 py-0.5 text-xs">npm run testdata</code> のあと{" "}
           <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">npm run eval</code> を実行すると、ここに結果が並びます。
