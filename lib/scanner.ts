@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
 import { db } from "./db";
-import { detect, FINDING_LABELS, maskNames, maxLevel, redact, ruleLevel, type Finding, type Level } from "./detect";
+import { detect, FINDING_LABELS, maskNames, maxLevel, redact, ruleLevel, type Finding, type FindingType, type Level } from "./detect";
 import { extract, kindOf } from "./extract";
 import { judgeFile, resolveConcurrency, type AiJudgement } from "./llm";
 
@@ -603,4 +603,67 @@ async function readValidatedFile(root: string, rel: string): Promise<Buffer | "t
   } finally {
     await fh.close();
   }
+}
+
+// ---------------------------------------------------------------- プレビュー
+
+export interface PreviewMark {
+  type: FindingType;
+  label: string;
+  level: Level;
+  start: number;
+  end: number;
+}
+
+export type Preview =
+  | {
+      available: true;
+      /** 検出した番号などを伏せたテキスト */
+      text: string;
+      marks: PreviewMark[];
+      /** スキャン後に内容が変わっている */
+      changed: boolean;
+      note: string | null;
+    }
+  | { available: false; reason: string };
+
+/**
+ * ファイルを読み直して、検出箇所の位置つきでマスク済みテキストを返す。
+ * 結果は保存しない（生のテキストを DB に残さないため）。
+ * OCR が必要なもの（画像・スキャン PDF）は時間がかかるので対象外にする。
+ */
+export async function buildPreview(scanId: number, fileId: number): Promise<Preview | null> {
+  const row = db()
+    .prepare(
+      `SELECT s.root AS root, f.rel_path AS rel, f.ext AS ext, f.sha256 AS sha256, f.status AS status, f.extract_method AS method
+         FROM files f JOIN scans s ON s.id = f.scan_id WHERE f.id=? AND f.scan_id=?`,
+    )
+    .get(fileId, scanId) as { root: string; rel: string; ext: string; sha256: string | null; status: string; method: string | null } | undefined;
+  if (!row) return null;
+  if (row.status !== "done") return { available: false, reason: "まだ解析が終わっていません" };
+  if (row.method === "ocr") return { available: false, reason: "画像から文字を読み取ったファイルのため、プレビューの代わりに保存済みの抜粋を表示しています" };
+  if (row.method === "none" || !row.method) return { available: false, reason: "このファイルの形式は内容を読み取れません" };
+
+  let buf: Buffer | "too_large";
+  try {
+    buf = await readValidatedFile(row.root, row.rel);
+  } catch {
+    return { available: false, reason: "ファイルを開けませんでした（移動・削除された可能性があります）" };
+  }
+  if (buf === "too_large") return { available: false, reason: "サイズが大きいためプレビューできません" };
+
+  const changed = row.sha256 !== null && crypto.createHash("sha256").update(buf).digest("hex") !== row.sha256;
+  const r = await extract(buf, row.ext, undefined, { allowOcr: false });
+  if (r.method === "none") return { available: false, reason: r.note ?? "内容を読み取れませんでした" };
+
+  const { findings, spans } = detect(r.text);
+  const meta = new Map(findings.map((f) => [f.type, f]));
+  const red = redact(r.text, spans);
+  return {
+    available: true,
+    text: red.text,
+    marks: red.placed.map((p) => ({ ...p, label: meta.get(p.type)?.label ?? FINDING_LABELS[p.type], level: meta.get(p.type)?.level ?? "low" })),
+    changed,
+    note: r.note ?? null,
+  };
 }

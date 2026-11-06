@@ -184,7 +184,7 @@ function unpdf() {
   return pdfjsReady;
 }
 
-async function extractPdf(buf: Buffer, signal?: AbortSignal): Promise<Extracted> {
+async function extractPdf(buf: Buffer, signal?: AbortSignal, allowOcr = true): Promise<Extracted> {
   const { getDocumentProxy, extractText, renderPageAsImage } = await unpdf();
   const doc = await getDocumentProxy(new Uint8Array(buf));
   const { text, totalPages } = await extractText(doc, { mergePages: false });
@@ -193,6 +193,7 @@ async function extractPdf(buf: Buffer, signal?: AbortSignal): Promise<Extracted>
   if (joined.replace(/\s/g, "").length >= 30 * totalPages) {
     return { text: joined, method: "pdf-text" };
   }
+  if (!allowOcr) throw new ExtractLimitError("文字情報のない PDF のため OCR が必要です");
   const pages = Math.min(totalPages, config.maxOcrPages);
   const out: string[] = [];
   for (let i = 1; i <= pages; i++) {
@@ -215,16 +216,21 @@ async function extractPdf(buf: Buffer, signal?: AbortSignal): Promise<Extracted>
 
 // ---------------------------------------------------------------- 入口
 
-export async function extract(buf: Buffer, ext: string, signal?: AbortSignal): Promise<Extracted> {
+export interface ExtractOptions {
+  /** false のとき OCR（AI による画像の読み取り）を行わない。時間がかかる処理を避けたい場面用 */
+  allowOcr?: boolean;
+}
+
+export async function extract(buf: Buffer, ext: string, signal?: AbortSignal, opts: ExtractOptions = {}): Promise<Extracted> {
   try {
-    return await extractInner(buf, ext, signal);
+    return await extractInner(buf, ext, signal, opts.allowOcr ?? true);
   } catch (e) {
     if (e instanceof ExtractLimitError) return { text: "", method: "none", note: e.message };
     throw e;
   }
 }
 
-async function extractInner(buf: Buffer, ext: string, signal?: AbortSignal): Promise<Extracted> {
+async function extractInner(buf: Buffer, ext: string, signal: AbortSignal | undefined, allowOcr: boolean): Promise<Extracted> {
   const kind = kindOf(ext);
   let r: Extracted;
   switch (kind) {
@@ -236,9 +242,10 @@ async function extractInner(buf: Buffer, ext: string, signal?: AbortSignal): Pro
       r = { text: extractOffice(buf, ext), method: "office" };
       break;
     case "pdf":
-      r = await extractPdf(buf, signal);
+      r = await extractPdf(buf, signal, allowOcr);
       break;
     case "image":
+      if (!allowOcr) return { text: "", method: "none", note: "画像のため OCR が必要です" };
       r = { text: await ocrImage(await toJpeg(buf), signal), method: "ocr" };
       break;
     default:
