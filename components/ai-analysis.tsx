@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AiStats, CallSummary, FeedbackSummary } from "@/lib/metrics";
+import type { AiStats, CallSummary, Counts, FeedbackSummary } from "@/lib/metrics";
 import { BUCKET_ORDER, BUCKETS } from "./actions";
 import { BackLink } from "./back-link";
 import { RECOMMENDATION, RISK, type Level } from "./labels";
@@ -72,7 +72,7 @@ export function AiAnalysis() {
 
       {!stats ? (
         <p className="text-sm text-stone-400">読み込み中…</p>
-      ) : stats.byKind.length === 0 && stats.files.total === 0 && stats.feedback.total.done + stats.feedback.total.skipped === 0 ? (
+      ) : stats.byKind.length === 0 && stats.files.total === 0 && stats.feedback.total.done + stats.feedback.total.skipped === 0 && stats.evals.length === 0 ? (
         <p className="rounded-xl border border-stone-200 bg-white p-5 text-sm text-stone-500">
           まだ記録がありません。棚卸しをすると、AI の処理の記録がたまっていきます。
         </p>
@@ -80,6 +80,7 @@ export function AiAnalysis() {
         <>
           <Speed stats={stats} />
           <Versions rows={stats.byVersion} />
+          <Evals stats={stats} />
           <Judgements stats={stats} />
           <Feedback stats={stats} />
           <ByExt stats={stats} />
@@ -255,6 +256,90 @@ function Judgements({ stats }: { stats: AiStats }) {
         </ul>
       </Card>
     </div>
+  );
+}
+
+/** 再現率（拾えた割合）と適合率（拾ったものが正しい割合）を並べて見せる */
+function RecallPrecision({ c }: { c: Counts }) {
+  const recall = c.tp + c.fn ? c.tp / (c.tp + c.fn) : null;
+  const precision = c.tp + c.fp ? c.tp / (c.tp + c.fp) : null;
+  const fmt = (v: number | null) => (v === null ? "—" : `${Math.round(v * 100)}%`);
+  return (
+    <span className="tabular-nums">
+      <span className={recall !== null && recall < 1 ? "text-red-700" : ""}>{fmt(recall)}</span>
+      <span className="text-stone-400"> / </span>
+      <span className={precision !== null && precision < 0.9 ? "text-amber-700" : ""}>{fmt(precision)}</span>
+    </span>
+  );
+}
+
+/** テストデータの正解を使った評価（npm run eval）の履歴 */
+function Evals({ stats }: { stats: AiStats }) {
+  return (
+    <Card
+      title="テストデータでの評価"
+      note="テストデータ（すべて架空）の正解と比べた結果です。モデルや指示文を変えたら npm run eval で評価し、同じ物差しで比べられます（期間の絞り込みは効きません）。氏名・読み仮名・ルール検出は「拾えた割合 / 拾ったものが正しい割合」です。"
+    >
+      {stats.evals.length === 0 ? (
+        <p className="text-sm text-stone-400">
+          まだ評価していません。<code className="rounded bg-stone-100 px-1 py-0.5 text-xs">npm run testdata</code> のあと{" "}
+          <code className="rounded bg-stone-100 px-1 py-0.5 text-xs">npm run eval</code> を実行すると、ここに結果が並びます。
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1080px] text-sm">
+            <thead className="border-b border-stone-200 text-left text-xs text-stone-500">
+              <tr className="whitespace-nowrap">
+                <th className="py-2 pr-3 font-medium">日時</th>
+                <th className="py-2 pr-3 font-medium">モデル</th>
+                <th className="py-2 pr-3 font-medium">判定 / 読み取りの版</th>
+                <th className="py-2 pr-3 text-right font-medium">氏名</th>
+                <th className="py-2 pr-3 text-right font-medium">読み仮名</th>
+                <th className="py-2 pr-3 text-right font-medium">リスク一致</th>
+                <th className="py-2 pr-3 text-right font-medium">推奨一致</th>
+                <th className="py-2 pr-3 text-right font-medium">伏せ漏れ</th>
+                <th className="py-2 pr-3 text-right font-medium">読み取り</th>
+                <th className="py-2 pr-3 text-right font-medium">ルール検出</th>
+                <th className="py-2 text-right font-medium">時間</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {stats.evals.map((e) => {
+                const m = e.metrics;
+                return (
+                  <tr key={e.id} className="whitespace-nowrap">
+                    <td className="whitespace-nowrap py-2 pr-3 text-xs text-stone-500">{date(e.createdAt)}</td>
+                    <td className="py-2 pr-3 font-mono text-xs">{e.model ?? "—"}</td>
+                    <td className="py-2 pr-3 font-mono text-xs">
+                      {e.judgeVersion} / {e.ocrVersion}
+                    </td>
+                    <td className="py-2 pr-3 text-right">
+                      <RecallPrecision c={m.names} />
+                    </td>
+                    <td className="py-2 pr-3 text-right">
+                      <RecallPrecision c={m.readings} />
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums">
+                      {pct(m.risk.ok, m.risk.total)}
+                      {m.risk.under > 0 && <span className="ml-1 text-xs text-red-700">（低い {m.risk.under}）</span>}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{pct(m.recommendation.ok, m.recommendation.total)}</td>
+                    <td className={`py-2 pr-3 text-right tabular-nums ${m.leaks.leaked ? "font-semibold text-red-700" : ""}`}>
+                      {m.leaks.leaked} / {m.leaks.total}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{pct(m.ocr.found, m.ocr.total)}</td>
+                    <td className="py-2 pr-3 text-right">
+                      <RecallPrecision c={m.rules} />
+                    </td>
+                    <td className="py-2 text-right tabular-nums">{Math.round(e.durationMs / 1000)}秒</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

@@ -163,7 +163,7 @@ const OCR_SYSTEM =
   "あなたは OCR エンジンです。画像に写っている文字を、読み取れる範囲ですべて書き起こしてください。表は1行1項目で「項目 値」の形にしてください。説明や前置きは書かないでください。";
 const OCR_USER = "この画像の文字をすべて書き起こしてください。";
 /** OCR の指示文の版（性能分析で、指示文の変更前後を比べるため） */
-const OCR_VERSION = promptVersion(OCR_SYSTEM, OCR_USER);
+export const OCR_VERSION = promptVersion(OCR_SYSTEM, OCR_USER);
 
 export async function ocrImage(jpeg: Uint8Array, signal?: AbortSignal, ctx?: CallContext): Promise<string> {
   const url = `data:image/jpeg;base64,${Buffer.from(jpeg).toString("base64")}`;

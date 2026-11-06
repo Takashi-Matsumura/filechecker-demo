@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import shutil
@@ -298,6 +299,64 @@ def generate(out: Path) -> list[tuple[str, str]]:
     return manifest
 
 
+# ---------------------------------------------------------------- 評価の正解
+
+def expected() -> dict[str, dict]:
+    """ファイルごとの正解（npm run eval で AI の性能を測るのに使う）。
+
+    - types:   含まれる情報の種類（ルール検出の種類名）
+    - names:   本文に書かれている氏名 / readings: 読み仮名
+    - risk / recommendation: 受け入れてよい値（判断が分かれうるものは複数）
+    - ocr:     画像から読み取れるべき文字列（空白は無視して照合）
+    - skip_ai: アプリでは AI を呼ばないファイル（重複は原本の結果を流用する）
+    """
+    names = [x[0] for x in PEOPLE]
+    readings = [x[1] for x in PEOPLE]
+    none_ = {"types": [], "names": [], "readings": [], "risk": ["none", "low"], "recommendation": ["keep"]}
+    e: dict[str, dict] = {
+        "営業部/顧客名簿_2025.xlsx": {"types": ["phone", "email", "address"], "names": names, "readings": readings,
+                                   "risk": ["high"], "recommendation": ["restrict"]},
+        "営業部/提案書_A社向け.pptx": none_,
+        "営業部/商談メモ_B社.pptx": {"types": ["phone", "email", "confidential"], "names": [names[2]], "readings": [],
+                                 "risk": ["medium", "high"], "recommendation": ["restrict", "review"]},
+        "営業部/見積書_2025-03.pdf": none_,
+        "人事/社員名簿_最終版.xlsx": {"types": ["mynumber", "phone", "email", "address"], "names": names, "readings": [],
+                                 "risk": ["high"], "recommendation": ["restrict"]},
+        "人事/社員名簿_最終版(1).xlsx": {"skip_ai": True},
+        "人事/給与振込口座一覧.csv": {"types": ["bank_account"], "names": names, "readings": [],
+                                  "risk": ["high"], "recommendation": ["restrict"]},
+        "人事/マイナンバー提出書_スキャン.pdf": {"types": ["mynumber", "phone", "address", "confidential"], "names": [names[0]],
+                                         "readings": [readings[0]], "risk": ["high"], "recommendation": ["restrict"],
+                                         "ocr": [names[0], readings[0], PEOPLE[0][6], PEOPLE[0][2], PEOPLE[0][4]]},
+        "人事/身分証コピー/運転免許証_佐藤.jpg": {"types": ["id_document", "address", "birthdate"], "names": [names[1]], "readings": [],
+                                          "risk": ["high"], "recommendation": ["restrict", "delete"],
+                                          "ocr": [names[1], PEOPLE[1][2], "123456789012"]},
+        "経理/請求書_2025-02.pdf": {"types": ["credit_card", "bank_account", "phone", "address"], "names": [names[3]], "readings": [],
+                                "risk": ["high"], "recommendation": ["restrict", "delete"]},
+        "経理/経費精算_スキャン.png": {"types": ["phone"], "names": [], "readings": [], "risk": ["low", "medium", "none"],
+                                  "recommendation": ["keep", "archive", "review", "restrict"],
+                                  "ocr": ["架空商店", "03-9876-5432", "12,960"]},
+        "法務/業務委託契約書_社外秘.docx": {"types": ["confidential"], "names": [], "readings": [],
+                                     "risk": ["medium", "high"], "recommendation": ["restrict"]},
+        "法務/NDA_ひな形.docx": {"types": ["confidential"], "names": [], "readings": [], "risk": ["none", "low", "medium"],
+                             "recommendation": ["keep", "review"]},
+        "共有/議事録_定例会_2025-04-10.docx": none_,
+        "共有/メモ.txt": {"types": ["phone", "email"], "names": [names[4]], "readings": [],
+                       "risk": ["medium", "high"], "recommendation": ["restrict", "delete", "review"]},
+        "共有/問い合わせエクスポート.csv": {"types": ["phone", "email"], "names": names, "readings": [],
+                                     "risk": ["high"], "recommendation": ["restrict"]},
+        "共有/古い資料/2019_展示会_来場者リスト.xlsx": {"types": ["email"], "names": names[:3], "readings": [],
+                                               "risk": ["medium", "high"], "recommendation": ["delete", "restrict"]},
+        "共有/古い資料/2018_社内報.docx": {**none_, "recommendation": ["archive", "delete"]},
+        "共有/古い資料/2018_社内報_コピー.docx": {"skip_ai": True},
+        "デスクトップ整理前/新しいフォルダー/申込書_スキャン.jpg": {"types": ["credit_card", "phone", "email", "address"], "names": [names[3]],
+                                                   "readings": [], "risk": ["high"], "recommendation": ["restrict"],
+                                                   "ocr": [names[3], PEOPLE[3][2], PEOPLE[3][3], PEOPLE[3][5], TEST_CARDS[1]]},
+        "デスクトップ整理前/無題.txt": {**none_, "recommendation": ["keep", "archive", "delete"]},
+    }
+    return e
+
+
 def main() -> None:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "testdata/sample-files").resolve()
     if out.exists():
@@ -311,6 +370,12 @@ def main() -> None:
             "| ファイル | 想定している検出内容 |", "|---|---|"]
     body += [f"| {rel} | {desc} |" for rel, desc in manifest]
     readme.write_text("\n".join(body) + "\n", encoding="utf-8")
+    # 評価の正解（npm run eval）。生成したファイルと正解の対応が崩れていないかも確かめる
+    exp = expected()
+    missing = sorted({rel for rel, _ in manifest} ^ set(exp))
+    if missing:
+        raise SystemExit(f"expected() と生成したファイルが一致しません: {missing}")
+    (out.parent / "expected.json").write_text(json.dumps(exp, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"generated {len(manifest)} files -> {out}")
     for rel, desc in manifest:
         print(f"  {rel}  ({desc})")

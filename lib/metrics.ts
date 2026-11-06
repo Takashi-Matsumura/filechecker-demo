@@ -167,6 +167,8 @@ export interface FeedbackSummary {
 
 export interface AiStats {
   since: string | null;
+  /** テストデータでの評価の結果（新しい順。期間の絞り込みは効かない） */
+  evals: EvalRun[];
   /** 担当者の判断（ファイルごとに最後の操作。未対応に戻したものは数えない） */
   feedback: {
     total: FeedbackSummary;
@@ -335,6 +337,7 @@ export function aiStats(since: string | null): AiStats {
 
   return {
     since,
+    evals: listEvals(),
     feedback,
     byKind,
     byVersion,
@@ -350,4 +353,74 @@ export function aiStats(since: string | null): AiStats {
       readings,
     },
   };
+}
+
+// ---------------------------------------------------------------- テストデータでの評価（npm run eval、lib/eval.ts）
+
+/** 正解と比べた数（再現率 = tp / (tp + fn)、適合率 = tp / (tp + fp)） */
+export interface Counts {
+  tp: number;
+  fp: number;
+  fn: number;
+}
+
+export interface EvalMetrics {
+  names: Counts;
+  readings: Counts;
+  /** ルール検出の種類（ファイル単位） */
+  rules: Counts;
+  risk: { ok: number; total: number; under: number };
+  recommendation: { ok: number; total: number };
+  /** 伏せたあとに残った正解の氏名・読み仮名の数 */
+  leaks: { leaked: number; total: number };
+  ocr: { found: number; total: number };
+  aiFailures: number;
+  /** ファイルごとの結果（氏名そのものは残さない） */
+  files: {
+    rel: string;
+    names: Counts;
+    readings: Counts;
+    rulesMissed: string[];
+    rulesExtra: string[];
+    risk: string | null;
+    riskOk: boolean | null;
+    recommendation: string | null;
+    recommendationOk: boolean | null;
+    leaked: number;
+    ocr: { found: number; total: number } | null;
+    error: string | null;
+  }[];
+}
+
+export interface EvalRun {
+  id: number;
+  createdAt: string;
+  model: string | null;
+  judgeVersion: string;
+  ocrVersion: string;
+  files: number;
+  durationMs: number;
+  metrics: EvalMetrics;
+}
+
+/** これまでの評価の結果（新しい順） */
+export function listEvals(limit = 20): EvalRun[] {
+  let rows;
+  try {
+    rows = db()
+    .prepare(`SELECT * FROM ai_evals ORDER BY id DESC LIMIT ?`)
+    .all(limit) as { id: number; created_at: string; model: string | null; judge_version: string; ocr_version: string; files: number; duration_ms: number; metrics_json: string }[];
+  } catch {
+    return []; // 表がまだ無い（起動し直す前）など
+  }
+  return rows.map((r) => ({
+    id: r.id,
+    createdAt: r.created_at,
+    model: r.model,
+    judgeVersion: r.judge_version,
+    ocrVersion: r.ocr_version,
+    files: r.files,
+    durationMs: r.duration_ms,
+    metrics: JSON.parse(r.metrics_json) as EvalMetrics,
+  }));
 }

@@ -1,0 +1,363 @@
+{
+  "営業部/顧客名簿_2025.xlsx": {
+    "types": [
+      "phone",
+      "email",
+      "address"
+    ],
+    "names": [
+      "山田 太郎",
+      "佐藤 花子",
+      "鈴木 一郎",
+      "高橋 美咲",
+      "田中 健"
+    ],
+    "readings": [
+      "ヤマダ タロウ",
+      "サトウ ハナコ",
+      "スズキ イチロウ",
+      "タカハシ ミサキ",
+      "タナカ ケン"
+    ],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ]
+  },
+  "営業部/提案書_A社向け.pptx": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "keep"
+    ]
+  },
+  "営業部/商談メモ_B社.pptx": {
+    "types": [
+      "phone",
+      "email",
+      "confidential"
+    ],
+    "names": [
+      "鈴木 一郎"
+    ],
+    "readings": [],
+    "risk": [
+      "medium",
+      "high"
+    ],
+    "recommendation": [
+      "restrict",
+      "review"
+    ]
+  },
+  "営業部/見積書_2025-03.pdf": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "keep"
+    ]
+  },
+  "人事/社員名簿_最終版.xlsx": {
+    "types": [
+      "mynumber",
+      "phone",
+      "email",
+      "address"
+    ],
+    "names": [
+      "山田 太郎",
+      "佐藤 花子",
+      "鈴木 一郎",
+      "高橋 美咲",
+      "田中 健"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ]
+  },
+  "人事/社員名簿_最終版(1).xlsx": {
+    "skip_ai": true
+  },
+  "人事/給与振込口座一覧.csv": {
+    "types": [
+      "bank_account"
+    ],
+    "names": [
+      "山田 太郎",
+      "佐藤 花子",
+      "鈴木 一郎",
+      "高橋 美咲",
+      "田中 健"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ]
+  },
+  "人事/マイナンバー提出書_スキャン.pdf": {
+    "types": [
+      "mynumber",
+      "phone",
+      "address",
+      "confidential"
+    ],
+    "names": [
+      "山田 太郎"
+    ],
+    "readings": [
+      "ヤマダ タロウ"
+    ],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ],
+    "ocr": [
+      "山田 太郎",
+      "ヤマダ タロウ",
+      "123456789018",
+      "東京都千代田区架空町1-2-3",
+      "090-1111-2222"
+    ]
+  },
+  "人事/身分証コピー/運転免許証_佐藤.jpg": {
+    "types": [
+      "id_document",
+      "address",
+      "birthdate"
+    ],
+    "names": [
+      "佐藤 花子"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict",
+      "delete"
+    ],
+    "ocr": [
+      "佐藤 花子",
+      "大阪府大阪市北区仮想2-4-6 サンプルビル301",
+      "123456789012"
+    ]
+  },
+  "経理/請求書_2025-02.pdf": {
+    "types": [
+      "credit_card",
+      "bank_account",
+      "phone",
+      "address"
+    ],
+    "names": [
+      "高橋 美咲"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict",
+      "delete"
+    ]
+  },
+  "経理/経費精算_スキャン.png": {
+    "types": [
+      "phone"
+    ],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "low",
+      "medium",
+      "none"
+    ],
+    "recommendation": [
+      "keep",
+      "archive",
+      "review",
+      "restrict"
+    ],
+    "ocr": [
+      "架空商店",
+      "03-9876-5432",
+      "12,960"
+    ]
+  },
+  "法務/業務委託契約書_社外秘.docx": {
+    "types": [
+      "confidential"
+    ],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "medium",
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ]
+  },
+  "法務/NDA_ひな形.docx": {
+    "types": [
+      "confidential"
+    ],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low",
+      "medium"
+    ],
+    "recommendation": [
+      "keep",
+      "review"
+    ]
+  },
+  "共有/議事録_定例会_2025-04-10.docx": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "keep"
+    ]
+  },
+  "共有/メモ.txt": {
+    "types": [
+      "phone",
+      "email"
+    ],
+    "names": [
+      "田中 健"
+    ],
+    "readings": [],
+    "risk": [
+      "medium",
+      "high"
+    ],
+    "recommendation": [
+      "restrict",
+      "delete",
+      "review"
+    ]
+  },
+  "共有/問い合わせエクスポート.csv": {
+    "types": [
+      "phone",
+      "email"
+    ],
+    "names": [
+      "山田 太郎",
+      "佐藤 花子",
+      "鈴木 一郎",
+      "高橋 美咲",
+      "田中 健"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ]
+  },
+  "共有/古い資料/2019_展示会_来場者リスト.xlsx": {
+    "types": [
+      "email"
+    ],
+    "names": [
+      "山田 太郎",
+      "佐藤 花子",
+      "鈴木 一郎"
+    ],
+    "readings": [],
+    "risk": [
+      "medium",
+      "high"
+    ],
+    "recommendation": [
+      "delete",
+      "restrict"
+    ]
+  },
+  "共有/古い資料/2018_社内報.docx": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "archive",
+      "delete"
+    ]
+  },
+  "共有/古い資料/2018_社内報_コピー.docx": {
+    "skip_ai": true
+  },
+  "デスクトップ整理前/新しいフォルダー/申込書_スキャン.jpg": {
+    "types": [
+      "credit_card",
+      "phone",
+      "email",
+      "address"
+    ],
+    "names": [
+      "高橋 美咲"
+    ],
+    "readings": [],
+    "risk": [
+      "high"
+    ],
+    "recommendation": [
+      "restrict"
+    ],
+    "ocr": [
+      "高橋 美咲",
+      "福岡県福岡市博多区例示4-8-12",
+      "092-456-7890",
+      "misaki.takahashi@example.co.jp",
+      "5555 5555 5555 4444"
+    ]
+  },
+  "デスクトップ整理前/無題.txt": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "keep",
+      "archive",
+      "delete"
+    ]
+  }
+}

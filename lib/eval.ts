@@ -1,0 +1,187 @@
+/**
+ * テストデータの正解を使った AI の評価（npm run eval）。
+ *
+ * testdata/sample-files の各ファイルを、アプリと同じ処理（文字の取り出し → ルール検出 → AI の判定 → 伏せる処理）に通し、
+ * testdata/expected.json の正解と比べる。テストデータはすべて架空なので、評価の間だけは AI が返した氏名と正解を突き合わせる。
+ * DB に残すのは集計した数字だけ（ai_evals）。
+ */
+import fs from "node:fs/promises";
+import path from "node:path";
+import { config } from "./config";
+import { db } from "./db";
+import { detect, findNameReadings, findNamesByLayout, redact, type Level } from "./detect";
+import { extract } from "./extract";
+import { JUDGE_VERSION, judgeFile, llmStatus, OCR_VERSION, type AiJudgement } from "./llm";
+import type { Counts, EvalMetrics } from "./metrics";
+
+interface Expected {
+  types?: string[];
+  names?: string[];
+  readings?: string[];
+  risk?: Level[];
+  recommendation?: string[];
+  ocr?: string[];
+  skip_ai?: boolean;
+}
+
+const RANK: Record<string, number> = { none: 0, low: 1, medium: 2, high: 3 };
+const norm = (s: string) => s.replace(/[\s　]/g, "");
+const zero = (): Counts => ({ tp: 0, fp: 0, fn: 0 });
+const addCounts = (a: Counts, b: Counts) => ((a.tp += b.tp), (a.fp += b.fp), (a.fn += b.fn));
+
+/** 名前の一覧を正解と比べる（空白の違いは無視する） */
+function compare(found: string[], truth: string[]): Counts {
+  const t = new Set(truth.map(norm));
+  const f = new Set(found.map(norm).filter((x) => x.length >= 2));
+  let tp = 0;
+  for (const x of f) if (t.has(x)) tp++;
+  return { tp, fp: f.size - tp, fn: t.size - tp };
+}
+
+/** 空白を無視して、本文に文字列が含まれるか */
+const containsLoose = (text: string, s: string) => norm(text).includes(norm(s));
+
+export interface EvalResult {
+  id: number | null;
+  model: string | null;
+  judgeVersion: string;
+  ocrVersion: string;
+  durationMs: number;
+  metrics: EvalMetrics;
+}
+
+/** 評価を実行する。進み具合は log に1行ずつ渡す */
+export async function runEval(root: string, log: (line: string) => void = () => {}): Promise<EvalResult> {
+  const status = await llmStatus();
+  if (!status.ok) throw new Error(`ローカル LLM に接続できません: ${status.error ?? ""}`);
+  const expected = JSON.parse(await fs.readFile(path.join(root, "expected.json"), "utf8")) as Record<string, Expected>;
+  const dir = path.join(root, "sample-files");
+  const staleBefore = new Date();
+  staleBefore.setFullYear(staleBefore.getFullYear() - config.staleYears);
+
+  const m: EvalMetrics = {
+    names: zero(),
+    readings: zero(),
+    rules: zero(),
+    risk: { ok: 0, total: 0, under: 0 },
+    recommendation: { ok: 0, total: 0 },
+    leaks: { leaked: 0, total: 0 },
+    ocr: { found: 0, total: 0 },
+    aiFailures: 0,
+    files: [],
+  };
+  const t0 = performance.now();
+  const entries = Object.entries(expected).filter(([, e]) => !e.skip_ai);
+  for (const [i, [rel, e]] of entries.entries()) {
+    const abs = path.join(dir, rel);
+    const ext = path.extname(rel).slice(1).toLowerCase();
+    const st = await fs.stat(abs);
+    const r = await extract(await fs.readFile(abs), ext, undefined, { ctx: { ext } });
+    const { findings, spans } = detect(r.text);
+
+    // ルール検出（ファイル単位で種類を比べる）
+    const truthTypes = new Set(e.types ?? []);
+    const foundTypes = new Set<string>(findings.map((f) => f.type));
+    const rules: Counts = { tp: [...foundTypes].filter((t) => truthTypes.has(t)).length, fp: 0, fn: 0 };
+    rules.fp = foundTypes.size - rules.tp;
+    rules.fn = truthTypes.size - rules.tp;
+    addCounts(m.rules, rules);
+
+    // AI の判定（アプリと同じ入力）
+    let ai: AiJudgement | null = null;
+    let error: string | null = null;
+    try {
+      ai = await judgeFile(
+        {
+          relPath: rel,
+          sizeKb: Math.ceil(st.size / 1024),
+          mtime: st.mtime.toISOString().slice(0, 10),
+          isStale: st.mtime < staleBefore,
+          isDuplicate: false,
+          extractMethod: r.method,
+          ruleSummary: findings.map((f) => `${f.label}×${f.count}`).join("、"),
+          text: redact(r.text, spans).text.slice(0, 6000),
+        },
+        undefined,
+        { ext },
+      );
+    } catch (err) {
+      error = err instanceof Error ? err.message.slice(0, 120) : String(err);
+      m.aiFailures++;
+    }
+
+    const names = compare(ai?.person_names ?? [], e.names ?? []);
+    const readings = compare(ai?.name_readings ?? [], e.readings ?? []);
+    addCounts(m.names, names);
+    addCounts(m.readings, readings);
+
+    // 伏せる処理（AI と書式のルールを合わせる）のあとに、正解の氏名・読み仮名が残っていないか
+    const targets = [...(ai?.person_names ?? []), ...findNamesByLayout(r.text), ...(ai?.name_readings ?? []), ...findNameReadings(r.text)];
+    const masked = redact(r.text, spans, targets.filter((n) => norm(n).length >= 2)).text;
+    const truthNames = [...(e.names ?? []), ...(e.readings ?? [])].filter((n) => containsLoose(r.text, n));
+    const leaked = truthNames.filter((n) => containsLoose(masked, n)).length;
+    m.leaks.leaked += leaked;
+    m.leaks.total += truthNames.length;
+
+    // リスクと推奨
+    let riskOk: boolean | null = null;
+    let recOk: boolean | null = null;
+    if (ai && e.risk?.length) {
+      riskOk = e.risk.includes(ai.risk);
+      m.risk.total++;
+      if (riskOk) m.risk.ok++;
+      else if (RANK[ai.risk] < Math.min(...e.risk.map((x) => RANK[x]))) m.risk.under++;
+    }
+    if (ai && e.recommendation?.length) {
+      recOk = e.recommendation.includes(ai.recommendation);
+      m.recommendation.total++;
+      if (recOk) m.recommendation.ok++;
+    }
+
+    // 文字の読み取り（画像のみ）
+    let ocr: { found: number; total: number } | null = null;
+    if (e.ocr?.length) {
+      ocr = { found: e.ocr.filter((s) => containsLoose(r.text, s)).length, total: e.ocr.length };
+      m.ocr.found += ocr.found;
+      m.ocr.total += ocr.total;
+    }
+
+    m.files.push({
+      rel,
+      names,
+      readings,
+      rulesMissed: [...truthTypes].filter((t) => !foundTypes.has(t)),
+      rulesExtra: [...foundTypes].filter((t) => !truthTypes.has(t)),
+      risk: ai?.risk ?? null,
+      riskOk,
+      recommendation: ai?.recommendation ?? null,
+      recommendationOk: recOk,
+      leaked,
+      ocr,
+      error,
+    });
+    log(
+      `[${i + 1}/${entries.length}] ${rel}  氏名 ${names.tp}/${names.tp + names.fn}` +
+        `${names.fp ? ` (誤り${names.fp})` : ""}  リスク ${ai?.risk ?? "-"}${riskOk === false ? " ✗" : ""}` +
+        `  推奨 ${ai?.recommendation ?? "-"}${recOk === false ? " ✗" : ""}${leaked ? `  伏せ漏れ ${leaked}` : ""}` +
+        `${ocr ? `  読み取り ${ocr.found}/${ocr.total}` : ""}${error ? `  エラー: ${error}` : ""}`,
+    );
+  }
+
+  const durationMs = performance.now() - t0;
+  let id: number | null = null;
+  try {
+    id = Number(
+      db()
+        .prepare(
+          `INSERT INTO ai_evals (created_at, model, judge_version, ocr_version, files, duration_ms, metrics_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(new Date().toISOString(), status.model ?? null, JUDGE_VERSION, OCR_VERSION, entries.length, Math.round(durationMs), JSON.stringify(m))
+        .lastInsertRowid,
+    );
+  } catch {
+    // 記録できなくても、結果は画面（コンソール）に出す
+  }
+  return { id, model: status.model ?? null, judgeVersion: JUDGE_VERSION, ocrVersion: OCR_VERSION, durationMs, metrics: m };
+}
