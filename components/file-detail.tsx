@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
+import { BackLink } from "./back-link";
 import { RiskBadge } from "./scan-dashboard";
 import { formatDate, formatSize, METHOD, RECOMMENDATION, RISK, type Level } from "./labels";
 import { TextPreview } from "./text-preview";
@@ -66,12 +67,9 @@ export function FileDetail({ params }: { params: Promise<{ id: string; fileId: s
 
   return (
     <div className="space-y-6">
-      <Link href={`/scans/${id}`} className="text-xs text-teal-700 underline underline-offset-2">
-        ← 棚卸し結果に戻る
-      </Link>
-
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-3">
+          <BackLink href={`/scans/${id}`} label="棚卸し結果に戻る" />
           <h1 className="text-xl font-bold tracking-tight">{file.rel_path.split("/").pop()}</h1>
           {file.status !== "pending" && <RiskBadge level={file.risk} />}
         </div>
