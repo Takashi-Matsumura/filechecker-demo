@@ -292,7 +292,8 @@ function PreviewLink({ f, scanId, small }: { f: FileItem; scanId: number; small?
   const label = `「${fileName(f.rel_path)}」の詳細とプレビューを見る`;
   return (
     <Link
-      href={`/scans/${scanId}/files/${f.id}`}
+      // #preview: 移った先で、内容のプレビューまで自動でスクロールする（text-preview.tsx）
+      href={`/scans/${scanId}/files/${f.id}#preview`}
       aria-label={label}
       title="詳細とプレビューを見る"
       className={`flex shrink-0 items-center justify-center rounded-md text-stone-500 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-teal-600 ${
