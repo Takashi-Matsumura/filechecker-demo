@@ -210,7 +210,10 @@
     "types": [
       "mynumber",
       "credit_card",
-      "bank_account"
+      "bank_account",
+      "birthdate",
+      "address",
+      "postal_code"
     ],
     "names": [
       "石井 誠"
@@ -225,7 +228,9 @@
     "secrets": [
       "８９０１ ２３４５ ６７８０",
       "３５３０－１１１３－３３３０－００００",
-      "２４６８０１３"
+      "２４６８０１３",
+      "９８０－０８１１",
+      "１９７９年４月１５日"
     ]
   },
   "番号っぽいが個人情報ではない.txt": {

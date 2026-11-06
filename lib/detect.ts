@@ -132,6 +132,8 @@ const ND = "[0-9０-９]";
 const NS = "[\\s　\\-－‐−ー]";
 /** 番号から数字だけを取り出す（全角の数字は半角にそろえる。チェックデジットなどの検査用） */
 const digitsOf = (s: string) => s.normalize("NFKC").replace(/\D/g, "");
+/** 日付の区切り（年 / . - と、その全角） */
+const DATE_SEP = "[年/.\\-／．－‐−]";
 
 const RULES: Rule[] = [
   {
@@ -185,14 +187,19 @@ const RULES: Rule[] = [
   {
     type: "postal_code",
     level: "low",
-    re: /〒\s?\d{3}-?\d{4}/g,
+    // 全角の数字・ハイフン類（〒２２０－０００１）も受け付ける
+    re: new RegExp(`〒\\s?${ND}{3}${PH}?${ND}{4}(?!${ND})`, "g"),
     mask: (s) => maskDigitsKeepLast(s, 0),
   },
   {
     type: "birthdate",
     level: "medium",
-    re: /生年月日[\s:：]*[^\n]{0,20}?\d{1,4}\s*[年/.-]\s*\d{1,2}\s*[月/.-]\s*\d{1,2}/g,
-    mask: (s) => s.replace(/\d/g, "*"),
+    // 全角の数字・区切り（１９８３年１２月３日、１９８３／１２／０３）も受け付け、伏せるときも全角の数字を伏せる
+    re: new RegExp(
+      `生年月日[\\s:：]*[^\\n]{0,20}?${ND}{1,4}\\s*${DATE_SEP}\\s*${ND}{1,2}\\s*${DATE_SEP.replace("年", "月")}\\s*${ND}{1,2}`,
+      "g",
+    ),
+    mask: (s) => s.replace(/[0-9０-９]/g, "*"),
   },
   {
     type: "confidential",
