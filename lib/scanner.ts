@@ -22,7 +22,8 @@ import {
 } from "./detect";
 import { extract, kindOf } from "./extract";
 import { JUDGE_VERSION, judgeFile, resolveConcurrency, type AiJudgement } from "./llm";
-import { countOverlap, recordFileStats, type CallContext } from "./metrics";
+import { countOverlap, recordFeedback, recordFileStats, type CallContext } from "./metrics";
+import { bucketOf, unreadReason, type FileItem } from "@/components/actions";
 
 // ---------------------------------------------------------------- パス検証
 
@@ -603,7 +604,24 @@ export function setActionStatus(scanId: number, fileId: number, status: ActionSt
   const r = db()
     .prepare(`UPDATE files SET action_status=?, action_at=? WHERE id=? AND scan_id=?`)
     .run(status, status === "todo" ? null : new Date().toISOString(), fileId, scanId);
-  return r.changes > 0;
+  if (r.changes === 0) return false;
+  // 性能分析: 担当者の判断を、そのときの区分・推奨と並べて記録する（本文・ファイル名は残さない）
+  const f = getFile(scanId, fileId) as FileItem | null;
+  if (f) {
+    const bucket = bucketOf(f);
+    if (bucket !== "ok") {
+      recordFeedback({
+        scanId,
+        fileId,
+        bucket,
+        finalRecommendation: f.ai?.recommendation ?? null,
+        risk: f.risk,
+        unread: unreadReason(f) !== null,
+        status,
+      });
+    }
+  }
+  return true;
 }
 
 /**

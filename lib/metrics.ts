@@ -104,6 +104,35 @@ export function recordFileStats(r: FileStatsRecord) {
   }
 }
 
+export interface FeedbackRecord {
+  scanId: number;
+  fileId: number;
+  bucket: string;
+  finalRecommendation: string | null;
+  risk: string | null;
+  unread: boolean;
+  status: string;
+}
+
+/**
+ * 担当者の判断（「済」「対応しない」「戻す」）を記録する。記録に失敗しても操作は止めない。
+ * 指示文の版は、そのファイルを判定したときの記録（ai_file_stats）から引く。
+ */
+export function recordFeedback(r: FeedbackRecord) {
+  try {
+    const d = db();
+    const pv = d
+      .prepare(`SELECT prompt_version FROM ai_file_stats WHERE scan_id=? AND file_id=? ORDER BY id DESC LIMIT 1`)
+      .get(r.scanId, r.fileId) as { prompt_version: string | null } | undefined;
+    d.prepare(
+      `INSERT INTO ai_feedback (scan_id, file_id, bucket, final_recommendation, risk, unread, status, prompt_version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(r.scanId, r.fileId, r.bucket, r.finalRecommendation, r.risk, r.unread ? 1 : 0, r.status, pv?.prompt_version ?? null, new Date().toISOString());
+  } catch {
+    // 記録の失敗は無視する
+  }
+}
+
 /** 空白の違いを無視して、2つの名前の一覧に共通するものの数を数える */
 export function countOverlap(a: string[], b: string[]): number {
   const key = (s: string) => s.replace(/[\s　]/g, "");
@@ -131,8 +160,22 @@ export interface CallSummary {
   lastAt: string | null;
 }
 
+export interface FeedbackSummary {
+  done: number;
+  skipped: number;
+}
+
 export interface AiStats {
   since: string | null;
+  /** 担当者の判断（ファイルごとに最後の操作。未対応に戻したものは数えない） */
+  feedback: {
+    total: FeedbackSummary;
+    byBucket: Record<string, FeedbackSummary>;
+    byRecommendation: Record<string, FeedbackSummary>;
+    byVersion: { promptVersion: string; done: number; skipped: number }[];
+    /** 中身を確認できなかったファイル（AI は中身を見ていない）の判断 */
+    unread: FeedbackSummary;
+  };
   byKind: CallSummary[];
   byVersion: CallSummary[];
   byExt: { kind: CallKind; ext: string; calls: number; avgMs: number | null }[];
@@ -264,8 +307,35 @@ export function aiStats(since: string | null): AiStats {
     readings.both += f.readings_both;
   }
 
+  // 担当者の判断: ファイルごとに最後の操作だけを数える（「戻す」で未対応に戻したものは除く）
+  const fb = d
+    .prepare(
+      `SELECT f.bucket, f.final_recommendation, f.unread, f.status, f.prompt_version
+         FROM ai_feedback f
+        WHERE f.id = (SELECT max(id) FROM ai_feedback g WHERE g.scan_id = f.scan_id AND g.file_id = f.file_id)
+          AND f.status <> 'todo' AND f.created_at >= ?`,
+    )
+    .all(since ?? "") as { bucket: string; final_recommendation: string | null; unread: number; status: string; prompt_version: string | null }[];
+  const empty = (): FeedbackSummary => ({ done: 0, skipped: 0 });
+  const add = (m: FeedbackSummary, status: string) => (status === "done" ? m.done++ : m.skipped++);
+  const feedback: AiStats["feedback"] = { total: empty(), byBucket: {}, byRecommendation: {}, byVersion: [], unread: empty() };
+  const versions = new Map<string, FeedbackSummary>();
+  for (const r of fb) {
+    add(feedback.total, r.status);
+    add((feedback.byBucket[r.bucket] ??= empty()), r.status);
+    if (r.final_recommendation) add((feedback.byRecommendation[r.final_recommendation] ??= empty()), r.status);
+    if (r.unread) add(feedback.unread, r.status);
+    else if (r.prompt_version) {
+      const v = versions.get(r.prompt_version) ?? empty();
+      add(v, r.status);
+      versions.set(r.prompt_version, v);
+    }
+  }
+  feedback.byVersion = [...versions].map(([promptVersion, v]) => ({ promptVersion, ...v }));
+
   return {
     since,
+    feedback,
     byKind,
     byVersion,
     byExt,
