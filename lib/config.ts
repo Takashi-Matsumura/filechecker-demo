@@ -19,8 +19,12 @@ export const config = {
     .filter(Boolean)
     .map((p) => path.resolve(p)),
 
-  /** 1スキャンで扱う最大ファイル数 */
-  maxFiles: Number(process.env.SCAN_MAX_FILES ?? 2000),
+  /**
+   * 1スキャンで扱う最大ファイル数。極端に大きなフォルダのときだけ働く安全のための上限。
+   * 10万件で結果画面の集計は約0.6秒、棚卸しは1件4〜5秒として約5日かかる。
+   * 超えた分は棚卸しせず、画面に「上限で打ち切り」と表示する
+   */
+  maxFiles: Number(process.env.SCAN_MAX_FILES ?? 100_000),
   /** 内容を読む最大ファイルサイズ(byte)。超えるものはメタ情報だけ */
   maxReadBytes: Number(process.env.SCAN_MAX_READ_BYTES ?? 30 * 1024 * 1024),
   /** 検出対象にするテキストの最大文字数 */
