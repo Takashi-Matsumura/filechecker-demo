@@ -71,6 +71,10 @@ function open(): DatabaseSync {
     // AI が推定した氏名の位置（マスク後テキスト上の [start, end) の JSON）。氏名の文字列そのものは保存しない
     db.exec(`ALTER TABLE files ADD COLUMN name_ranges TEXT`);
   }
+  if (!fileCols.some((c) => c.name === "ocr_preview")) {
+    // OCR で読み取ったファイルのプレビュー（番号・氏名を伏せた全文と検出位置の JSON）。OCR のやり直しを避けるため
+    db.exec(`ALTER TABLE files ADD COLUMN ocr_preview TEXT`);
+  }
   return db;
 }
 

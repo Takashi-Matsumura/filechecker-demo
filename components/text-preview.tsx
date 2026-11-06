@@ -12,7 +12,7 @@ interface Mark {
 }
 
 type Preview =
-  | { available: true; text: string; marks: Mark[]; changed: boolean; note: string | null }
+  | { available: true; text: string; marks: Mark[]; changed: boolean; note: string | null; source: "live" | "ocr" }
   | { available: false; reason: string };
 
 const HIGHLIGHT: Record<Level, string> = {
@@ -91,9 +91,11 @@ export function TextPreview({ scanId, fileId, excerpt }: { scanId: string; fileI
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">内容のプレビュー</h2>
         <span className="text-xs text-stone-400">
-          {preview?.available
-            ? "検出した箇所に色を付けています。番号や氏名は伏せて表示し、この内容は保存しません"
-            : "検出した番号や連絡先、AI が推定した氏名を伏せて保存した抜粋です"}
+          {!preview?.available
+            ? "検出した番号や連絡先、AI が推定した氏名を伏せて保存した抜粋です"
+            : preview.source === "ocr"
+              ? "棚卸しのときに画像から読み取った文字です。検出した箇所に色を付け、番号や氏名は伏せて保存しています"
+              : "検出した箇所に色を付けています。番号や氏名は伏せて表示し、この内容は保存しません"}
         </span>
       </div>
 
