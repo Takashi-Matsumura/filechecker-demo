@@ -53,9 +53,10 @@ export const BUCKETS: Record<Exclude<Bucket, "ok">, { verb: string; hint: string
   remove: {
     verb: "消す",
     hint: "重複しているか、役目を終えています。不要なら削除してください",
-    dot: "bg-orange-500",
-    ring: "ring-orange-200",
-    text: "text-orange-700",
+    // 「移す」の赤と取り違えないよう、色相の離れた紫にする
+    dot: "bg-violet-500",
+    ring: "ring-violet-200",
+    text: "text-violet-700",
   },
   tidy: {
     verb: "整理する",
