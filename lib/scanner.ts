@@ -132,6 +132,23 @@ export async function resumeScan(scanId: number): Promise<"ok" | "not_paused" | 
   return "ok";
 }
 
+/**
+ * 棚卸しの記録を削除する（ファイルごとの結果も消える）。実行中のものは消さない（先に中断してもらう）。
+ * 動いている処理が、消した記録に結果を書き込むのを防ぐため。AI の性能分析の記録（数字だけ）は残す。
+ */
+export function deleteScan(scanId: number): "ok" | "not_found" | "running" {
+  const row = db().prepare(`SELECT * FROM scans WHERE id=?`).get(scanId) as ScanRow | undefined;
+  if (!row) return "not_found";
+  // サーバが止まって取り残された「実行中」は、中断扱いに直してから判定する
+  if (RUNNING.has(reconcile(row).status)) return "running";
+  // 判定と削除の間に再開されないよう、実行中でないことを条件に1回の DELETE で消す
+  const placeholders = [...RUNNING].map(() => "?").join(",");
+  const r = db()
+    .prepare(`DELETE FROM scans WHERE id=? AND status NOT IN (${placeholders})`)
+    .run(scanId, ...RUNNING);
+  return r.changes > 0 ? "ok" : "running";
+}
+
 /** バックグラウンドで実行し、中断要求（DB の pausing）を監視して打ち切る */
 function launch(scanId: number, root: string) {
   const controller = new AbortController();
