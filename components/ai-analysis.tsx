@@ -14,7 +14,12 @@ const PERIODS: { key: Period; label: string }[] = [
   { key: "7", label: "直近7日" },
 ];
 
-const KIND_LABEL: Record<string, string> = { ocr: "文字の読み取り（OCR）", judge: "判定（要約・リスク・推奨）" };
+const KIND_LABEL: Record<string, string> = {
+  ocr: "文字の読み取り（OCR）",
+  judge: "判定（要約・リスク・推奨）",
+  names: "氏名の補完（判定で拾いきれない氏名）",
+};
+const KIND_SHORT: Record<string, string> = { ocr: "読み取り", judge: "判定", names: "氏名の補完" };
 const ERROR_LABEL: Record<string, string> = { timeout: "時間切れ", http: "HTTP エラー", network: "接続できない", parse: "JSON の形の誤り" };
 const LEVELS: Level[] = ["high", "medium", "low", "none"];
 
@@ -160,7 +165,7 @@ function Versions({ rows }: { rows: CallSummary[] }) {
           <tbody className="divide-y divide-stone-100">
             {rows.map((r) => (
               <tr key={`${r.kind}-${r.model}-${r.promptVersion}`}>
-                <td className="py-2 pr-3 text-xs">{r.kind === "ocr" ? "読み取り" : "判定"}</td>
+                <td className="py-2 pr-3 text-xs">{KIND_SHORT[r.kind] ?? r.kind}</td>
                 <td className="py-2 pr-3 font-mono text-xs">{r.model ?? "—"}</td>
                 <td className="py-2 pr-3 font-mono text-xs">{r.promptVersion}</td>
                 <td className="whitespace-nowrap py-2 pr-3 text-xs text-stone-500">
@@ -474,7 +479,7 @@ function ByExt({ stats }: { stats: AiStats }) {
           <tbody className="divide-y divide-stone-100">
             {stats.byExt.map((r) => (
               <tr key={`${r.kind}-${r.ext}`}>
-                <td className="py-2 pr-3 text-xs">{r.kind === "ocr" ? "読み取り" : "判定"}</td>
+                <td className="py-2 pr-3 text-xs">{KIND_SHORT[r.kind] ?? r.kind}</td>
                 <td className="py-2 pr-3 font-mono text-xs">{r.ext ? `.${r.ext}` : "—"}</td>
                 <td className="py-2 pr-3 text-right tabular-nums">{num(r.calls)}</td>
                 <td className="py-2 text-right tabular-nums">{sec(r.avgMs)}</td>

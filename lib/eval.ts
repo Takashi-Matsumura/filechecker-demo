@@ -11,7 +11,7 @@ import { config } from "./config";
 import { db } from "./db";
 import { detect, findNameReadings, findNamesByLayout, redact, type Level } from "./detect";
 import { extract } from "./extract";
-import { JUDGE_VERSION, judgeFile, llmStatus, OCR_VERSION, type AiJudgement } from "./llm";
+import { collectMoreNames, JUDGE_TEXT_CHARS, JUDGE_VERSION, judgeFile, llmStatus, OCR_VERSION, type AiJudgement } from "./llm";
 import type { Counts, EvalMetrics } from "./metrics";
 
 interface Expected {
@@ -110,7 +110,7 @@ export async function runEval(root: string, dataset: Dataset = "sample", log: (l
           isDuplicate: false,
           extractMethod: r.method,
           ruleSummary: findings.map((f) => `${f.label}×${f.count}`).join("、"),
-          text: redact(r.text, spans).text.slice(0, 6000),
+          text: redact(r.text, spans).text.slice(0, JUDGE_TEXT_CHARS),
         },
         undefined,
         { ext },
@@ -120,13 +120,29 @@ export async function runEval(root: string, dataset: Dataset = "sample", log: (l
       m.aiFailures++;
     }
 
-    const names = compare(ai?.person_names ?? [], e.names ?? []);
-    const readings = compare(ai?.name_readings ?? [], e.readings ?? []);
+    // アプリと同じく、判定で拾いきれない氏名を補う
+    let more = { names: [] as string[], readings: [] as string[] };
+    if (r.text.trim()) {
+      try {
+        more = await collectMoreNames(
+          redact(r.text, spans).text,
+          ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null,
+          undefined,
+          { ext },
+        );
+      } catch (err) {
+        error = error ?? (err instanceof Error ? err.message.slice(0, 120) : String(err));
+      }
+    }
+    const aiNames = [...(ai?.person_names ?? []), ...more.names];
+    const aiReadings = [...(ai?.name_readings ?? []), ...more.readings];
+    const names = compare(aiNames, e.names ?? []);
+    const readings = compare(aiReadings, e.readings ?? []);
     addCounts(m.names, names);
     addCounts(m.readings, readings);
 
     // 伏せる処理（AI と書式のルールを合わせる）のあとに、正解の氏名・読み仮名が残っていないか
-    const targets = [...(ai?.person_names ?? []), ...findNamesByLayout(r.text), ...(ai?.name_readings ?? []), ...findNameReadings(r.text)];
+    const targets = [...aiNames, ...findNamesByLayout(r.text), ...aiReadings, ...findNameReadings(r.text)];
     const masked = redact(r.text, spans, targets.filter((n) => norm(n).length >= 2)).text;
     const truthNames = [...(e.names ?? []), ...(e.readings ?? [])].filter((n) => containsLoose(r.text, n));
     const leaked = truthNames.filter((n) => containsLoose(masked, n)).length;

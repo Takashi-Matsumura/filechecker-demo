@@ -21,7 +21,15 @@ import {
   type NameRange,
 } from "./detect";
 import { extract, kindOf } from "./extract";
-import { JUDGE_VERSION, judgeFile, resolveConcurrency, type AiJudgement } from "./llm";
+import {
+  collectMoreNames,
+  JUDGE_TEXT_CHARS,
+  JUDGE_VERSION,
+  judgeFile,
+  MAX_NAME_CHUNKS,
+  resolveConcurrency,
+  type AiJudgement,
+} from "./llm";
 import { countOverlap, recordFeedback, recordFileStats, type CallContext } from "./metrics";
 import { bucketOf, unreadReason, type FileItem } from "@/components/actions";
 
@@ -403,7 +411,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
       isDuplicate: row.dup_of !== null,
       extractMethod: method,
       ruleSummary,
-      text: masked.slice(0, 6000),
+      text: masked.slice(0, JUDGE_TEXT_CHARS),
     }, signal, ctx);
   } catch (e) {
     // 中断による打ち切りは失敗扱いにせず、呼び出し元で「未処理」に戻す
@@ -411,12 +419,27 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
     notes.push(`AI 判定に失敗: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
   }
 
-  // 氏名は AI の推定（20件まで）に、書式（名簿の「氏名」列など）から拾ったものを足す。大きな名簿でも全員を伏せるため
+  // 判定は先頭の本文しか見ず、氏名も20件までなので、上限に達したときや本文が長いときは氏名だけを聞き直して補う
+  // （文章の中に20人以上の氏名がある議事録など、書式のルールでは拾えない氏名を伏せ漏らさないため）
+  let more = { names: [] as string[], readings: [] as string[], truncated: false };
+  if (text.trim()) {
+    try {
+      more = await collectMoreNames(masked, ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null, signal, ctx);
+      if (more.truncated) notes.push(`本文が長いため、氏名の確認は先頭 ${(JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS).toLocaleString()} 字まで`);
+    } catch (e) {
+      if (signal.aborted) throw e;
+      notes.push(`氏名の補完に失敗: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+    }
+  }
+  const aiNameList = [...(ai?.person_names ?? []), ...more.names];
+  const aiReadingList = [...(ai?.name_readings ?? []), ...more.readings];
+
+  // 氏名は AI の推定に、書式（名簿の「氏名」列など）から拾ったものを足す。大きな名簿でも全員を伏せるため
   const layoutNames = findNamesByLayout(text);
-  const names = uniqueNames([...(ai?.person_names ?? []), ...layoutNames]);
+  const names = uniqueNames([...aiNameList, ...layoutNames]);
   // 読み仮名（「ヤマダ タロウ」など）も伏せる。AI の結果に、書式から拾ったものを足す（件数には数えない）
   const layoutReadings = findNameReadings(text);
-  const readings = uniqueNames([...(ai?.name_readings ?? []), ...layoutReadings]);
+  const readings = uniqueNames([...aiReadingList, ...layoutReadings]);
   const maskTargets = [...names, ...readings];
   // プレビューで同じ箇所を伏せ直せるよう、氏名の「位置」だけを残す（マスク後テキスト上の座標）
   const nameRanges = findNameRanges(masked, maskTargets);
@@ -476,8 +499,8 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   );
 
   // 性能分析: ルール・AI・書式の判断を並べて記録する（本文や氏名そのものは残さない）
-  const aiNames = uniqueNames(ai?.person_names ?? []);
-  const aiReadings = uniqueNames(ai?.name_readings ?? []);
+  const aiNames = uniqueNames(aiNameList);
+  const aiReadings = uniqueNames(aiReadingList);
   const uLayoutNames = uniqueNames(layoutNames);
   const uLayoutReadings = uniqueNames(layoutReadings);
   recordFileStats({
