@@ -244,65 +244,93 @@ function nameVariants(names: string[]): string[] {
 
 const KANA_ONLY = /^[ぁ-ゖァ-ヶｦ-ﾟー・･]+$/;
 
-// ---------------------------------------------------------------- 氏名の読み仮名
+// ---------------------------------------------------------------- 書式から拾う氏名・読み仮名
 
 const KANA_WORD = "(?:[ァ-ヶｦ-ﾟー・･]+|[ぁ-ゖー]+)";
 const READING_LABEL = "(?:フリガナ|ふりがな|ﾌﾘｶﾞﾅ|よみがな|ヨミガナ|読み仮名|カナ氏名|氏名カナ|氏名[（(]カナ[）)]|カナ)";
-/** 「フリガナ ヤマダ タロウ」「ふりがな：やまだ たろう」のような、見出しの直後の読み仮名 */
-// 見出しの前がカナでなく（「カナダ」を拾わない）、見出しと読み仮名の間に空白かコロンがあること
-const READING_INLINE = new RegExp(
-  `(?<![ぁ-ゖァ-ヶｦ-ﾟー])${READING_LABEL}(?:[ 　]*[:：][ 　]*|[ 　]+)(${KANA_WORD}(?:[ 　]${KANA_WORD})?)`,
-  "g",
-);
+// 見出しの前が文字でなく（「カナダ」を拾わない）、見出しと値の間に空白かコロンがあること
+const SEP = "(?:[ 　]*[:：][ 　]*|[ 　]+)";
+/** 「フリガナ ヤマダ タロウ」「ふりがな：やまだ たろう」 */
+const READING_INLINE = new RegExp(`(?<![ぁ-ゖァ-ヶｦ-ﾟー])${READING_LABEL}${SEP}(${KANA_WORD}(?:[ 　]${KANA_WORD})?)`, "g");
 const READING_HEADER = new RegExp(`^${READING_LABEL}$`);
 const KANA_CELL = new RegExp(`^${KANA_WORD}(?:[ 　]${KANA_WORD})?$`);
-/**
- * 拾う読み仮名の上限。伏せる処理は1件ごとに本文全体を調べるので、
- * 巨大な名簿で処理が止まらないように抑える（AI が返す氏名も20件まで）。
- */
-const MAX_READINGS = 100;
+
+const NAME_LABEL = "(?:氏名|お名前|名前|姓名|フルネーム)";
+/** 「氏名 山田 太郎」「お名前：高橋 美咲」。誤って拾わないよう、値は漢字だけに限る */
+const NAME_INLINE = new RegExp(`(?<![\\p{L}])${NAME_LABEL}${SEP}(\\p{Script=Han}{1,5}(?:[ 　]\\p{Script=Han}{1,5})?)(?![\\p{Script=Han}])`, "gu");
+/** 名簿の氏名の列。完全一致の見出しだけを対象にする */
+const NAME_HEADER =
+  /^(?:氏名|氏名（漢字）|お名前|名前|姓名|フルネーム|社員名|従業員名|職員名|顧客名|会員名|担当者|担当者名|受講者名|参加者名|姓|名|名字|苗字|name|full ?name|first ?name|last ?name)$/i;
+/** 「顧客名」などの列には会社や部署も入るので、それらしい値は氏名として扱わない */
+const NOT_PERSON = /株式会社|有限会社|合同会社|㈱|（株）|\(株\)|法人|協会|組合|事務所|センター|部$|課$|店$|支社|本社|営業所/;
+const NAME_CELL = new RegExp(
+  "^(?:[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}ー々]{1,8}(?:[ 　][\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}ー々]{1,8})?" +
+    "|[A-Za-z][A-Za-z.'-]{1,20}(?: [A-Za-z][A-Za-z.'-]{1,20}){0,2})$",
+  "u",
+);
+
+const enough = (v: string) => v.replace(/[\s　]/g, "").length >= 2;
+const unquote = (c: string) => c.trim().replace(/^"|"$/g, "");
 
 /**
- * 本文から氏名の読み仮名を拾う（AI の拾い漏れに備えたルール）。
- * - 見出しの直後に書かれたカナ（申込書・提出書の OCR など）
- * - 表の「フリガナ」列のカナ（Excel・CSV の名簿。タブ区切り / カンマ区切り）
+ * 表（タブ区切り / カンマ区切り）で、見出しが headerRe に合う列の値を集める。
+ * 見出し行から下を1回だけ読み、読んだ行は飛ばす（同じ行を読み直さない）。
  */
-export function findNameReadings(text: string): string[] {
-  const out = new Set<string>();
-  const add = (v: string) => {
-    if (out.size < MAX_READINGS && v.replace(/[\s　]/g, "").length >= 2) out.add(v);
-  };
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    if (out.size >= MAX_READINGS) break;
-    // 表の行（タブ・カンマ区切り）は列で判断するので、ここでは扱わない
-    if (/[\t,]/.test(line)) continue;
-    for (const m of line.matchAll(READING_INLINE)) add(m[1].trim());
-  }
-  // 表は見出し行から下を1回だけ読む（読んだ行は飛ばして、同じ行を何度も読み直さない）
-  for (let i = 0; i < lines.length && out.size < MAX_READINGS; i++) {
+function columnValues(lines: string[], headerRe: RegExp, cellRe: RegExp, out: Set<string>, reject?: RegExp) {
+  for (let i = 0; i < lines.length; i++) {
     for (const sep of ["\t", ","]) {
-      const header = lines[i].split(sep).map((c) => c.trim().replace(/^"|"$/g, ""));
+      const header = lines[i].split(sep).map(unquote);
       if (header.length < 2) continue;
-      const col = header.findIndex((c) => READING_HEADER.test(c));
-      if (col < 0) continue;
+      const cols = header.flatMap((c, k) => (headerRe.test(c) ? [k] : []));
+      if (cols.length === 0) continue;
       let j = i + 1;
-      for (; j < lines.length && lines[j].trim() && out.size < MAX_READINGS; j++) {
-        add((lines[j].split(sep)[col] ?? "").trim().replace(/^"|"$/g, "").match(KANA_CELL)?.[0] ?? "");
+      for (; j < lines.length && lines[j].trim(); j++) {
+        const cells = lines[j].split(sep);
+        for (const k of cols) {
+          const cell = unquote(cells[k] ?? "");
+          if (cellRe.test(cell) && enough(cell) && !reject?.test(cell)) out.add(cell);
+        }
       }
       i = j - 1;
       break;
     }
   }
+}
+
+/** 表の行（タブ・カンマ区切り）以外の行で、見出しの直後の値を集める */
+function inlineValues(lines: string[], re: RegExp, out: Set<string>) {
+  for (const line of lines) {
+    if (/[\t,]/.test(line)) continue;
+    for (const m of line.matchAll(re)) if (enough(m[1])) out.add(m[1].trim());
+  }
+}
+
+/**
+ * 本文から氏名の読み仮名を拾う（AI の拾い漏れに備えたルール。件数の上限なし）。
+ * - 見出しの直後に書かれたカナ（申込書・提出書の OCR など）
+ * - 表の「フリガナ」列のカナ（Excel・CSV の名簿）
+ */
+export function findNameReadings(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const out = new Set<string>();
+  inlineValues(lines, READING_INLINE, out);
+  columnValues(lines, READING_HEADER, KANA_CELL, out);
   return [...out];
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 /**
- * 氏名を伏せる。表記ゆれ（「高橋美咲」と「高橋 美咲」）に対応するため文字間の空白を許して照合し、
- * 先頭1文字と空白を残して他を＊にする。長さが変わらないので、検出位置はずれない。
+ * 本文から氏名を書式で拾う。AI が返す氏名は20件までなので、大きな名簿でも全員を伏せるために使う。
+ * - 表の「氏名」「社員名」「姓」「名」などの列の値
+ * - 「氏名 山田 太郎」のような見出しの直後の漢字の名前
  */
+export function findNamesByLayout(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const out = new Set<string>();
+  inlineValues(lines, NAME_INLINE, out);
+  columnValues(lines, NAME_HEADER, NAME_CELL, out, NOT_PERSON);
+  return [...out];
+}
+
 /** 1つの氏名の一致を伏せる（先頭の1文字と空白は残す） */
 function maskMatch(m: string): string {
   let first = true;
@@ -318,22 +346,47 @@ function maskMatch(m: string): string {
 /** 氏名の範囲 [start, end)。同じ長さで伏せるので、伏せる前後で位置は変わらない */
 export type NameRange = [number, number];
 
+type TrieNode = { next: Map<string, TrieNode>; end: boolean };
+const isSpace = (c: string) => /[\s　]/.test(c);
+
 /**
- * テキスト中で氏名が出てくる範囲を返す。maskNames と同じ順・同じ規則で探す。
+ * テキスト中で氏名が出てくる範囲を返す。
+ * 表記ゆれ（「高橋美咲」と「高橋 美咲」）に対応するため、文字間の空白を無視して照合する。
+ * すべての名前を1つの木（トライ）にまとめ、本文を1回だけ走査するので、
+ * 名前が何千件あっても時間は本文の長さにほぼ比例する（件数の上限は設けない）。
+ * 重なり合う一致はすべて拾って1つの範囲にまとめる（例: 「田佐」と「佐藤花子」→「田＊＊＊＊」）。
  * 氏名の文字列そのものを保存せずに、あとで同じ箇所を伏せ直すために使う。
  */
 export function findNameRanges(text: string, names: string[]): NameRange[] {
-  let out = text;
-  const ranges: NameRange[] = [];
-  for (const v of nameVariants(names)) {
-    const re = new RegExp([...v].map(escapeRe).join("[\\s\\u3000]*"), "g");
-    out = out.replace(re, (m: string, offset: number) => {
-      ranges.push([offset, offset + m.length]);
-      return maskMatch(m);
-    });
+  const variants = nameVariants(names);
+  if (variants.length === 0) return [];
+  const root: TrieNode = { next: new Map(), end: false };
+  for (const v of variants) {
+    let node = root;
+    for (let k = 0; k < v.length; k++) {
+      let child = node.next.get(v[k]);
+      if (!child) node.next.set(v[k], (child = { next: new Map(), end: false }));
+      node = child;
+    }
+    node.end = true;
   }
-  // 後から見つけた氏名が、先に伏せた範囲と重なることがある（例: 「田佐」と「佐藤花子」）。
-  // 重なる範囲は1つにまとめる。まとめた範囲を伏せた結果は、順に伏せた結果と同じになる
+  // 空白を除いた文字の並びと、それぞれの元の位置
+  const chars: string[] = [];
+  const pos: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (isSpace(text[i])) continue;
+    chars.push(text[i]);
+    pos.push(i);
+  }
+  const ranges: NameRange[] = [];
+  for (let s = 0; s < chars.length; s++) {
+    let node: TrieNode | undefined = root;
+    for (let e = s; e < chars.length; e++) {
+      node = node.next.get(chars[e]);
+      if (!node) break;
+      if (node.end) ranges.push([pos[s], pos[e] + 1]);
+    }
+  }
   const merged: NameRange[] = [];
   for (const r of ranges.sort((a, b) => a[0] - b[0])) {
     const last = merged[merged.length - 1];

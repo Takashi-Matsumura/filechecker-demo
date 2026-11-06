@@ -8,6 +8,7 @@ import {
   detect,
   findNameRanges,
   findNameReadings,
+  findNamesByLayout,
   FINDING_LABELS,
   maskNameRanges,
   maskNames,
@@ -326,6 +327,20 @@ async function copyFromRepresentative(id: number, repId: number, signal: AbortSi
 
 // ---------------------------------------------------------------- 1ファイルの処理
 
+/** 空白の違いだけの重複（「高橋美咲」と「高橋 美咲」）を除き、2文字以上のものだけを残す */
+function uniqueNames(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    const n = raw.trim();
+    const key = n.replace(/[\s　]/g, "");
+    if (key.length < 2 || seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
+  }
+  return out;
+}
+
 const FALLBACK_REC: Record<Level, AiJudgement["recommendation"]> = {
   high: "restrict",
   medium: "review",
@@ -381,9 +396,10 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
     notes.push(`AI 判定に失敗: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
   }
 
-  const names = (ai?.person_names ?? []).filter((n) => n.trim().length >= 2);
+  // 氏名は AI の推定（20件まで）に、書式（名簿の「氏名」列など）から拾ったものを足す。大きな名簿でも全員を伏せるため
+  const names = uniqueNames([...(ai?.person_names ?? []), ...findNamesByLayout(text)]);
   // 読み仮名（「ヤマダ タロウ」など）も伏せる。AI の結果に、書式から拾ったものを足す（件数には数えない）
-  const readings = [...new Set([...(ai?.name_readings ?? []).slice(0, 20), ...findNameReadings(text)])].filter((n) => n.trim().length >= 2);
+  const readings = uniqueNames([...(ai?.name_readings ?? []), ...findNameReadings(text)]);
   const maskTargets = [...names, ...readings];
   // プレビューで同じ箇所を伏せ直せるよう、氏名の「位置」だけを残す（マスク後テキスト上の座標）
   const nameRanges = findNameRanges(masked, maskTargets);
@@ -673,11 +689,11 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
   const row = db()
     .prepare(
       `SELECT s.root AS root, f.rel_path AS rel, f.ext AS ext, f.sha256 AS sha256, f.status AS status, f.extract_method AS method,
-              f.findings_json AS findings, f.name_ranges AS nameRanges, f.ocr_preview AS ocrPreview
+              f.findings_json AS findings, f.name_ranges AS nameRanges, f.ocr_preview AS ocrPreview, f.text_chars AS textChars
          FROM files f JOIN scans s ON s.id = f.scan_id WHERE f.id=? AND f.scan_id=?`,
     )
     .get(fileId, scanId) as
-    | { root: string; rel: string; ext: string; sha256: string | null; status: string; method: string | null; findings: string; nameRanges: string | null; ocrPreview: string | null }
+    | { root: string; rel: string; ext: string; sha256: string | null; status: string; method: string | null; findings: string; nameRanges: string | null; ocrPreview: string | null; textChars: number }
     | undefined;
   if (!row) return null;
   if (row.status !== "done") return { available: false, reason: "まだ解析が終わっていません" };
@@ -708,12 +724,20 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
   }
   if (buf === "too_large") return { available: false, reason: "サイズが大きいためプレビューできません" };
 
-  const changed = row.sha256 === null || crypto.createHash("sha256").update(buf).digest("hex") !== row.sha256;
+  let changed = row.sha256 === null || crypto.createHash("sha256").update(buf).digest("hex") !== row.sha256;
   if (needsNames && changed) {
     return { available: false, reason: "棚卸しのあとに内容が変わり、氏名を確実に伏せられないため、保存済みの抜粋を表示しています" };
   }
   const r = await extract(buf, row.ext, undefined, { allowOcr: false });
   if (r.method === "none") return { available: false, reason: r.note ?? "内容を読み取れませんでした" };
+  // ファイルが同じでも、取り出し方の改良で本文が変わると、保存した氏名の位置が合わなくなる。
+  // 棚卸し時と文字数が違えば「変わった」とみなす（伏せる必要があれば抜粋の表示に切り替える）
+  if (r.text.length !== row.textChars) {
+    if (needsNames) {
+      return { available: false, reason: "棚卸しのあとに読み取り方が変わり、氏名を確実に伏せられないため、保存済みの抜粋を表示しています。もう一度棚卸しするとプレビューできます" };
+    }
+    changed = true;
+  }
 
   const { findings, spans } = detect(r.text);
   const red = redact(r.text, spans);
