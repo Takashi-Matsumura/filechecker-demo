@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
 import { db } from "./db";
-import { detect, findNameReadings, findNamesByLayout, redact, type Level } from "./detect";
+import { detect, findNameReadings, findNamesByLayout, redact, toRedactedOffsets, type Level } from "./detect";
 import { extract } from "./extract";
 import { keepAwake } from "./keep-awake";
 import { collectMoreNames, JUDGE_TEXT_CHARS, JUDGE_VERSION, judgeFile, llmStatus, OCR_VERSION, type AiJudgement } from "./llm";
@@ -140,11 +140,15 @@ async function evaluate(root: string, dataset: Dataset, log: (line: string) => v
     let more = { names: [] as string[], readings: [] as string[] };
     if (r.text.trim()) {
       try {
+        // 棚卸しと同じく、シートの位置は伏せた後の本文の位置に直して渡す
+        const starts = r.sections ? toRedactedOffsets(spans, r.sections.map((x) => x.start)) : [];
         more = await collectMoreNames(
           redact(r.text, spans).text,
           ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null,
           undefined,
           { ext },
+          undefined,
+          r.sections?.map((x, i) => ({ label: x.label, start: starts[i] })),
         );
       } catch (err) {
         error = error ?? (err instanceof Error ? err.message.slice(0, 120) : String(err));

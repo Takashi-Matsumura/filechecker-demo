@@ -20,17 +20,18 @@ import {
   type FindingType,
   type Level,
   type NameRange,
+  type Span,
 } from "./detect";
 import { keepAwake } from "./keep-awake";
-import { extract, kindOf, sampleSections, sectionsUpTo, type TextSection } from "./extract";
+import { extract, kindOf, sectionsUpTo, type TextSection } from "./extract";
 import {
   collectMoreNames,
   JUDGE_TEXT_CHARS,
   JUDGE_VERSION,
   judgeFile,
-  MAX_NAME_CHUNKS,
   resolveConcurrency,
   type AiJudgement,
+  type NamesCoverage,
 } from "./llm";
 import { countOverlap, recordFeedback, recordFileStats, type CallContext } from "./metrics";
 import { bucketOf, unreadReason, type FileItem } from "@/components/actions";
@@ -403,6 +404,28 @@ const FALLBACK_REC: Record<Level, AiJudgement["recommendation"]> = {
   none: "keep",
 };
 
+/**
+ * AI による氏名の確認が本文の一部だけだったときの補足（最後まで確認したときは null）。
+ * ルールの検出と、書式から拾う氏名は全文が対象なので、ここで示すのは AI の確認の範囲だけ
+ */
+function namesCoverageNote(coverage: NamesCoverage, sections: TextSection[] | undefined, masked: string, spans: Span[]): string | null {
+  const sheets = sections?.filter((x) => x.label !== "コメント") ?? [];
+  if (coverage.kind === "sampled") {
+    return `本文が長いため、AI による氏名の確認は各シートの先頭の部分のみ（全 ${sheets.length} シート中 ${coverage.covered} シート。数字だけの並びや、既に確認した語だけの行は省いて確認）`;
+  }
+  if (coverage.kind === "partial") {
+    const pct = Math.floor((coverage.origChars / Math.max(1, masked.length)) * 100);
+    // Excel は、どのシートまで届いたかも示す（シートの位置は伏せる前の本文のものなので、伏せた後の位置に直して比べる）
+    let upTo = "";
+    if (sheets.length > 1) {
+      const starts = toRedactedOffsets(spans, sheets.map((x) => x.start));
+      upTo = `、全 ${sheets.length} シート中 ${sectionsUpTo(sheets.map((x, i) => ({ label: x.label, start: starts[i] })), coverage.origChars)} シート目まで`;
+    }
+    return `本文が長いため、AI による氏名の確認は先頭から約 ${pct}% まで（${coverage.origChars.toLocaleString()} / ${coverage.total.toLocaleString()} 字${upTo}。数字だけの並びや、既に確認した語だけの行は省いて確認）`;
+  }
+  return null;
+}
+
 async function processFile(id: number, root: string, ext: string, signal: AbortSignal) {
   const d = db();
   const row = d.prepare(`SELECT scan_id, rel_path, size, mtime, is_stale, dup_of FROM files WHERE id=?`).get(id) as {
@@ -460,36 +483,22 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
 
   // 判定は先頭の本文しか見ず、氏名も20件までなので、上限に達したときや本文が長いときは氏名だけを聞き直して補う
   // （文章の中に20人以上の氏名がある議事録など、書式のルールでは拾えない氏名を伏せ漏らさないため）
-  let more = { names: [] as string[], readings: [] as string[], truncated: false };
+  let more = { names: [] as string[], readings: [] as string[] };
   if (text.trim()) {
     try {
-      const limit = JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS;
-      const sheets = sections?.filter((x) => x.label !== "コメント") ?? [];
-      // シートが複数ある長い Excel は、先頭だけでなく各シートの頭から少しずつ切り出して聞く（2シート目以降の名簿を見落とさないため）
-      let sample: ReturnType<typeof sampleSections> | null = null;
-      if (sections && sheets.length > 1 && masked.length > limit) {
-        const starts = toRedactedOffsets(spans, sections.map((x) => x.start));
-        const mapped = sections.map((x, i) => ({ label: x.label, start: starts[i] }));
-        sample = sampleSections(masked, mapped, JUDGE_TEXT_CHARS, limit - JUDGE_TEXT_CHARS);
-      }
-      more = await collectMoreNames(
-        sample?.text ?? masked,
+      // シートの位置は、番号を伏せた本文の位置に直して渡す（伏せ字で長さが変わるため）
+      const starts = sections ? toRedactedOffsets(spans, sections.map((x) => x.start)) : [];
+      const r = await collectMoreNames(
+        masked,
         ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null,
         signal,
         ctx,
         (step, total) => setProgress(id, "names", step, total),
+        sections?.map((x, i) => ({ label: x.label, start: starts[i] })),
       );
-      if (sample) {
-        // 見本に入ったのはシート（とコメント）の頭の部分。ルールの検出と、書式から拾う氏名は全文が対象
-        const coveredSheets = Math.min(sample.covered, sheets.length);
-        notes.push(
-          `本文が長いため、AI による氏名の確認は各シートの先頭の部分のみ（全 ${sheets.length} シート中 ${coveredSheets} シート、1 シートあたり最大 ${sample.perSection.toLocaleString()} 字）`,
-        );
-      } else if (more.truncated) {
-        // Excel は、AI の氏名の確認がどのシートまで届いたかも示す（ルールの検出と、書式から拾う氏名は全シートが対象）
-        const upTo = sheets.length > 1 ? `（全 ${sheets.length} シート中 ${sectionsUpTo(sheets, limit)} シート目まで）` : "";
-        notes.push(`本文が長いため、AI による氏名の確認は先頭 ${limit.toLocaleString()} 字まで${upTo}`);
-      }
+      more = r;
+      const note = namesCoverageNote(r.coverage, sections, masked, spans);
+      if (note) notes.push(note);
     } catch (e) {
       if (signal.aborted) throw e;
       notes.push(`氏名の補完に失敗: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);

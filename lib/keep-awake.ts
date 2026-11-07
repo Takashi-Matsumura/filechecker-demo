@@ -3,7 +3,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 /**
  * 棚卸し・評価の間、PC がアイドルでスリープしないようにする。
  * 処理の途中でスリープに入ると、ローカル LLM（llama-server）も止まり、AI の呼び出しがタイムアウトして
- * 結果が欠ける（氏名の確認の失敗など）。画面が消えるのは止めない（-i はシステムのスリープだけを防ぐ）。
+ * 結果が欠ける（氏名の確認の失敗など）。画面が消えるのは止めない。
+ * -i はアイドルによるスリープを、-s は電源につないでいる間のシステムのスリープを止める。-i だけでは、画面が消えたあとに
+ * Mac が一時的に起きて（ダークウェイク）自動で眠り直すのを止められず、評価の途中で 12 分止まったことがある。
  * mac は caffeinate を使う。Windows・Linux は今のところ何もしない（電源の設定でスリープを止めてもらう）。
  * 同時に複数の棚卸しが走ることがあるので、数を数えて、すべて終わったら解除する。
  */
@@ -24,7 +26,7 @@ export function keepAwake(): () => void {
   if (s.count === 1 && process.platform === "darwin") {
     try {
       // -w: このアプリのプロセスが終わったら caffeinate も終わる（解除し忘れても残らない）
-      const child = spawn("/usr/bin/caffeinate", ["-i", "-w", String(process.pid)], { stdio: "ignore" });
+      const child = spawn("/usr/bin/caffeinate", ["-i", "-s", "-w", String(process.pid)], { stdio: "ignore" });
       child.on("error", () => {
         // caffeinate が無い・起動できない場合は、スリープを止めずに続ける
         if (s.child === child) s.child = null;
