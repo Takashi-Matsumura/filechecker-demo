@@ -21,6 +21,7 @@ import {
   type Level,
   type NameRange,
 } from "./detect";
+import { keepAwake } from "./keep-awake";
 import { extract, kindOf, sampleSections, sectionsUpTo, type TextSection } from "./extract";
 import {
   collectMoreNames,
@@ -160,6 +161,8 @@ function launch(scanId: number, root: string) {
   const watcher = setInterval(() => {
     if (!controller.signal.aborted && isPausing()) controller.abort(new PausedError());
   }, 1000);
+  // 棚卸しの途中で PC がスリープすると、AI の呼び出しがタイムアウトして結果が欠けるため
+  const release = keepAwake();
 
   void runScan(scanId, root, controller.signal)
     .then(() => {
@@ -182,7 +185,10 @@ function launch(scanId: number, root: string) {
         scanId,
       );
     })
-    .finally(() => clearInterval(watcher));
+    .finally(() => {
+      clearInterval(watcher);
+      release();
+    });
 }
 
 // ---------------------------------------------------------------- 走査
