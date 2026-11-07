@@ -14,13 +14,14 @@ import {
   maskNames,
   maxLevel,
   redact,
+  toRedactedOffsets,
   ruleLevel,
   type Finding,
   type FindingType,
   type Level,
   type NameRange,
 } from "./detect";
-import { extract, kindOf, sectionsUpTo, type TextSection } from "./extract";
+import { extract, kindOf, sampleSections, sectionsUpTo, type TextSection } from "./extract";
 import {
   collectMoreNames,
   JUDGE_TEXT_CHARS,
@@ -456,17 +457,30 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   let more = { names: [] as string[], readings: [] as string[], truncated: false };
   if (text.trim()) {
     try {
+      const limit = JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS;
+      const sheets = sections?.filter((x) => x.label !== "コメント") ?? [];
+      // シートが複数ある長い Excel は、先頭だけでなく各シートの頭から少しずつ切り出して聞く（2シート目以降の名簿を見落とさないため）
+      let sample: ReturnType<typeof sampleSections> | null = null;
+      if (sections && sheets.length > 1 && masked.length > limit) {
+        const starts = toRedactedOffsets(spans, sections.map((x) => x.start));
+        const mapped = sections.map((x, i) => ({ label: x.label, start: starts[i] }));
+        sample = sampleSections(masked, mapped, JUDGE_TEXT_CHARS, limit - JUDGE_TEXT_CHARS);
+      }
       more = await collectMoreNames(
-        masked,
+        sample?.text ?? masked,
         ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null,
         signal,
         ctx,
         (step, total) => setProgress(id, "names", step, total),
       );
-      if (more.truncated) {
+      if (sample) {
+        // 見本に入ったのはシート（とコメント）の頭の部分。ルールの検出と、書式から拾う氏名は全文が対象
+        const coveredSheets = Math.min(sample.covered, sheets.length);
+        notes.push(
+          `本文が長いため、AI による氏名の確認は各シートの先頭の部分のみ（全 ${sheets.length} シート中 ${coveredSheets} シート、1 シートあたり最大 ${sample.perSection.toLocaleString()} 字）`,
+        );
+      } else if (more.truncated) {
         // Excel は、AI の氏名の確認がどのシートまで届いたかも示す（ルールの検出と、書式から拾う氏名は全シートが対象）
-        const limit = JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS;
-        const sheets = sections?.filter((x) => x.label !== "コメント") ?? [];
         const upTo = sheets.length > 1 ? `（全 ${sheets.length} シート中 ${sectionsUpTo(sheets, limit)} シート目まで）` : "";
         notes.push(`本文が長いため、AI による氏名の確認は先頭 ${limit.toLocaleString()} 字まで${upTo}`);
       }

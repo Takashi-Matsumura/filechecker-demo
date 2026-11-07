@@ -69,6 +69,55 @@ export function sectionsUpTo(sections: TextSection[], offset: number): number {
   return sections.filter((s) => s.start < offset).length;
 }
 
+export interface SectionSample {
+  text: string;
+  /** 見本に（一部でも）入った区切りの数 */
+  covered: number;
+  /** 区切り1つあたりに割り振った文字数（短い区切りは全文が入るので、これより短い） */
+  perSection: number;
+}
+
+/**
+ * 長い本文から、AI に渡す見本を作る。先頭 head 字はそのまま入れ、残りは各区切り（Excel のシート）の頭から、
+ * budget 字を区切りの間で公平に割り振って切り出す（短い区切りは全文、余った分は長い区切りに回す）。
+ * 先頭だけを見ると、シートが多い Excel では1シート目しか確認できないため。
+ * 区切りが多すぎて1つあたり minPerSection 字に満たないときは、前から順に入るだけ入れる。
+ */
+export function sampleSections(text: string, sections: TextSection[], head: number, budget: number, minPerSection = 400): SectionSample {
+  const sorted = [...sections].filter((s) => s.start < text.length).sort((a, b) => a.start - b.start);
+  const regions: { label: string; start: number; end: number; cont: boolean }[] = [];
+  sorted.forEach((s, i) => {
+    const end = Math.min(sorted[i + 1]?.start ?? text.length, text.length);
+    const start = Math.max(s.start, head);
+    if (end > start) regions.push({ label: s.label, start, end, cont: s.start < head });
+  });
+  // 先頭 head 字の中に収まっている区切り（見本に全文が入る）
+  const inHead = sorted.filter((_, i) => (sorted[i + 1]?.start ?? text.length) <= head).length;
+  // 区切りの見出し（「（続き）」など）の分を差し引いてから割り振る
+  const SEP = 30;
+  const max = Math.max(0, Math.floor(budget / (minPerSection + SEP)));
+  const picked = regions.slice(0, max);
+  let rest = budget - picked.length * SEP;
+  // 短い順に、残りを均等に割り振る（短い区切りは全文が入り、余りが長い区切りに回る）
+  const alloc = new Map<number, number>();
+  const byLen = picked.map((r, i) => ({ i, len: r.end - r.start })).sort((a, b) => a.len - b.len);
+  let perSection = 0;
+  byLen.forEach((r, k) => {
+    const share = Math.floor(rest / (byLen.length - k));
+    const n = Math.min(r.len, share);
+    alloc.set(r.i, n);
+    rest -= n;
+    perSection = Math.max(perSection, n);
+  });
+  const parts = [text.slice(0, head)];
+  picked.forEach((r, i) => {
+    const body = text.slice(r.start, r.start + (alloc.get(i) ?? 0));
+    // シートの頭から切り出したときは、本文の中の「【シート: 名前】」の行がそのまま入る
+    parts.push(r.cont ? `【${r.label}（続き）】\n${body}` : body);
+  });
+  return { text: parts.join("\n"), covered: inHead + picked.length, perSection };
+}
+
 // ---------------------------------------------------------------- テキスト
 
 function decodeText(buf: Buffer): string {
