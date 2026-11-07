@@ -11,6 +11,7 @@ import { config } from "./config";
 import { db } from "./db";
 import { detect, findNameReadings, findNamesByLayout, redact, type Level } from "./detect";
 import { extract } from "./extract";
+import { keepAwake } from "./keep-awake";
 import { collectMoreNames, JUDGE_TEXT_CHARS, JUDGE_VERSION, judgeFile, llmStatus, OCR_VERSION, type AiJudgement } from "./llm";
 import type { Counts, EvalMetrics } from "./metrics";
 
@@ -63,6 +64,16 @@ export type Dataset = keyof typeof DATASETS;
 
 /** 評価を実行する。進み具合は log に1行ずつ渡す */
 export async function runEval(root: string, dataset: Dataset = "sample", log: (line: string) => void = () => {}): Promise<EvalResult> {
+  // 評価は数十分かかることがある。途中で PC がスリープすると AI の呼び出しがタイムアウトし、評価が正しく測れない
+  const release = keepAwake();
+  try {
+    return await evaluate(root, dataset, log);
+  } finally {
+    release();
+  }
+}
+
+async function evaluate(root: string, dataset: Dataset, log: (line: string) => void): Promise<EvalResult> {
   const status = await llmStatus();
   if (!status.ok) throw new Error(`ローカル LLM に接続できません: ${status.error ?? ""}`);
   const ds = DATASETS[dataset];
