@@ -12,7 +12,7 @@ import { db } from "./db";
 import { detect, findNameReadings, findNamesByLayout, redact, toRedactedOffsets, type Level } from "./detect";
 import { extract } from "./extract";
 import { keepAwake } from "./keep-awake";
-import { collectMoreNames, JUDGE_TEXT_CHARS, JUDGE_VERSION, judgeFile, llmStatus, OCR_VERSION, type AiJudgement } from "./llm";
+import { collectMoreNames, JUDGE_VERSION, judgeFile, judgeTextOf, llmStatus, OCR_VERSION, type AiJudgement } from "./llm";
 import type { Counts, EvalMetrics } from "./metrics";
 
 interface Expected {
@@ -113,7 +113,11 @@ async function evaluate(root: string, dataset: Dataset, log: (line: string) => v
     rules.fn = truthTypes.size - rules.tp;
     addCounts(m.rules, rules);
 
-    // AI の判定（アプリと同じ入力）
+    // AI の判定（アプリと同じ入力。長い本文は縮めて、文書全体から切り出す）
+    const masked = redact(r.text, spans).text;
+    const starts = r.sections ? toRedactedOffsets(spans, r.sections.map((x) => x.start)) : [];
+    const maskedSections = r.sections?.map((x, i) => ({ label: x.label, start: starts[i] }));
+    const judgeText = judgeTextOf(masked, maskedSections);
     let ai: AiJudgement | null = null;
     let error: string | null = null;
     try {
@@ -126,7 +130,8 @@ async function evaluate(root: string, dataset: Dataset, log: (line: string) => v
           isDuplicate: false,
           extractMethod: r.method,
           ruleSummary: findings.map((f) => `${f.label}×${f.count}`).join("、"),
-          text: redact(r.text, spans).text.slice(0, JUDGE_TEXT_CHARS),
+          text: judgeText.text,
+          condensedFrom: judgeText.condensedFrom,
         },
         undefined,
         { ext },
@@ -140,15 +145,13 @@ async function evaluate(root: string, dataset: Dataset, log: (line: string) => v
     let more = { names: [] as string[], readings: [] as string[] };
     if (r.text.trim()) {
       try {
-        // 棚卸しと同じく、シートの位置は伏せた後の本文の位置に直して渡す
-        const starts = r.sections ? toRedactedOffsets(spans, r.sections.map((x) => x.start)) : [];
         more = await collectMoreNames(
-          redact(r.text, spans).text,
-          ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null,
+          masked,
+          ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [], text: judgeText.text } : null,
           undefined,
           { ext },
           undefined,
-          r.sections?.map((x, i) => ({ label: x.label, start: starts[i] })),
+          maskedSections,
         );
       } catch (err) {
         error = error ?? (err instanceof Error ? err.message.slice(0, 120) : String(err));
@@ -163,14 +166,14 @@ async function evaluate(root: string, dataset: Dataset, log: (line: string) => v
 
     // 伏せる処理（AI と書式のルールを合わせる）のあとに、正解の氏名・読み仮名が残っていないか
     const targets = [...aiNames, ...findNamesByLayout(r.text), ...aiReadings, ...findNameReadings(r.text)];
-    const masked = redact(r.text, spans, targets.filter((n) => norm(n).length >= 2)).text;
+    const finalMasked = redact(r.text, spans, targets.filter((n) => norm(n).length >= 2)).text;
     const truthNames = [...(e.names ?? []), ...(e.readings ?? [])].filter((n) => containsLoose(r.text, n));
-    const leaked = truthNames.filter((n) => containsLoose(masked, n)).length;
+    const leaked = truthNames.filter((n) => containsLoose(finalMasked, n)).length;
     m.leaks.leaked += leaked;
     m.leaks.total += truthNames.length;
     // 伏せられるべき番号（電話番号など）が、伏せたあとの本文に残っていないか（半角・全角の違いは無視して照合）
     const secrets = (e.secrets ?? []).filter((x) => containsLoose(r.text, x));
-    const secretsLeaked = secrets.filter((x) => containsLoose(masked, x)).length;
+    const secretsLeaked = secrets.filter((x) => containsLoose(finalMasked, x)).length;
     secretLeaks.leaked += secretsLeaked;
     secretLeaks.total += secrets.length;
 

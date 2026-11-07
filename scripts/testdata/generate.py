@@ -537,7 +537,35 @@ def generate_hard(out: Path) -> list[tuple[str, str]]:
     p = add("予算実績_社外秘.csv", "上と同じ形で先頭に「社外秘」の表示がある表: 機密表示あり・個人情報なし")
     p.write_bytes(budget_csv(nonzero=True, mark="【社外秘】2026年度 事業部別予算実績（経営会議資料）"))
 
+    # 先頭は予算表ばかりで、後ろのシートに連絡先つきの名簿がある Excel（先頭だけを見る判定では見落とす）
+    p = add("部門予算_連絡網つき.xlsx", "12 シートの予算表の後ろ（13 シート目）に、6 人分の電話・メールの緊急連絡網がある Excel")
+    rnd = random.Random(11)
+    wb = Workbook()
+    wb.remove(wb.active)
+    for m in [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3]:
+        ws = wb.create_sheet(f"{m}月")
+        ws.append(["科目", "予算", "実績", "差異"])
+        for k in range(120):
+            b = rnd.randint(100, 9000)
+            ws.append([f"費目{k % 12 + 1:02d}", b, int(b * rnd.uniform(0.8, 1.2)), f"=C{k + 2}-B{k + 2}"])
+    ws = wb.create_sheet("緊急連絡網")
+    ws.append(["氏名", "携帯電話", "メール"])
+    for name, phone, mail in ROSTER_IN_BUDGET:
+        ws.append([name, phone, mail])
+    wb.save(p)
+
     return manifest
+
+
+# 予算表の後ろの緊急連絡網に載せる6人（ほかの難しいデータと重ならない架空の人物）
+ROSTER_IN_BUDGET = [
+    ("原田 修", "090-3141-5926", "osamu.harada@example.co.jp"),
+    ("今井 京子", "080-2718-2818", "kyoko.imai@example.jp"),
+    ("福田 学", "070-1414-2135", "manabu.fukuda@example.com"),
+    ("前田 亜希", "090-1732-0508", "aki.maeda@example.co.jp"),
+    ("岩崎 隼", "080-2236-0679", "hayato.iwasaki@example.jp"),
+    ("内田 千夏", "070-3316-6247", "chinatsu.uchida@example.com"),
+]
 
 
 def budget_csv(nonzero: bool, mark: str | None = None) -> bytes:
@@ -609,6 +637,9 @@ def expected_hard() -> dict[str, dict]:
         "事業部別_予算実績_未入力.csv": {"types": [], "names": [], "readings": [], "risk": ["none", "low"], "recommendation": ["keep"]},
         "予算実績_社外秘.csv": {"types": ["confidential"], "names": [], "readings": [], "risk": ["medium"],
                              "recommendation": ["restrict", "review"]},
+        # 6 人分の連絡先が並ぶ名簿があるので「高」。名簿は 13 シート目なので、判定が先頭だけを見ると見落とす
+        "部門予算_連絡網つき.xlsx": {"types": ["phone", "email"], "names": [x[0] for x in ROSTER_IN_BUDGET], "readings": [],
+                               "secrets": [x[1] for x in ROSTER_IN_BUDGET], "risk": ["high"], "recommendation": ["restrict"]},
     }
 
 
