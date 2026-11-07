@@ -553,6 +553,37 @@ export interface Redacted {
  * 検出範囲と氏名をマスクしたテキストと、そこから切り出した文脈サンプルを返す。
  * サンプルは必ずマスク後のテキストから作る（隣の項目の生データが文脈に混ざらないように）。
  */
+/**
+ * 元の本文の位置を、redact() で番号を伏せた本文の位置に直す（伏せ字で長さが変わるため）。
+ * 位置が伏せた範囲の途中なら、伏せ字の先頭に寄せる。redact() と同じく、重なった範囲は前のものを優先する
+ */
+export function toRedactedOffsets(spans: Span[], offsets: number[]): number[] {
+  // redact() が実際に伏せる範囲（重なりは前を優先）と、その範囲の前後での長さのずれ
+  const placed: { start: number; end: number; before: number; after: number }[] = [];
+  let pos = 0;
+  let shift = 0;
+  for (const s of [...spans].sort((a, b) => a.start - b.start)) {
+    if (s.start < pos) continue;
+    const before = shift;
+    shift += s.masked.length - (s.end - s.start);
+    placed.push({ start: s.start, end: s.end, before, after: shift });
+    pos = s.end;
+  }
+  return offsets.map((offset) => {
+    // offset より前で始まる最後の範囲を二分探索で探す
+    let lo = 0;
+    let hi = placed.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (placed[mid].start < offset) lo = mid + 1;
+      else hi = mid;
+    }
+    const p = placed[lo - 1];
+    if (!p) return offset;
+    return p.end > offset ? p.start + p.before : offset + p.after;
+  });
+}
+
 export function redact(text: string, spans: Span[], names: string[] = []): Redacted {
   let out = "";
   let pos = 0;
