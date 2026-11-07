@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { platformInfo } from "@/lib/platform";
-import { deleteScan, getScan, getScanSummary } from "@/lib/scanner";
+import { deleteScan, getScan, getScanActivity, getScanSummary } from "@/lib/scanner";
 
-/** ?files=0 のときは棚卸しの記録（進み具合）だけを返す。ファイルが多いときのポーリングを軽くするため */
+/** ?files=0 のときは棚卸しの記録（進み具合と、いま処理中のファイル）だけを返す。ファイルが多いときのポーリングを軽くするため */
 export async function GET(req: NextRequest, ctx: RouteContext<"/api/scans/[id]">) {
   const { id } = await ctx.params;
   const n = Number(id);
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/scans/[id]">
   if (req.nextUrl.searchParams.get("files") === "0") {
     const scan = getScanSummary(n);
     if (!scan) return Response.json({ error: "not found" }, { status: 404 });
-    return Response.json({ scan, platform: platformInfo() });
+    return Response.json({ scan, platform: platformInfo(), activity: getScanActivity(n) });
   }
   const data = getScan(n);
   if (!data) return Response.json({ error: "not found" }, { status: 404 });

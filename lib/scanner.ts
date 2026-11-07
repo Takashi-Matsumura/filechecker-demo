@@ -291,6 +291,9 @@ async function runScan(scanId: number, root: string, signal: AbortSignal) {
   if (!walked) await buildFileList(scanId, root, signal);
   signal.throwIfAborted();
 
+  // 前回の実行（サーバの停止・中断）で残った「処理中」の印を消す
+  d.prepare(`UPDATE files SET progress=NULL WHERE scan_id=? AND progress IS NOT NULL`).run(scanId);
+
   // 未処理のファイルだけを対象にする。重複は原本の結果を流用するので、原本を先に処理する
   const jobs = d
     .prepare(`SELECT id, rel_path, ext, dup_of FROM files WHERE scan_id=? AND status='pending' ORDER BY (dup_of IS NOT NULL), id`)
@@ -305,6 +308,7 @@ async function runScan(scanId: number, root: string, signal: AbortSignal) {
   const worker = async () => {
     while (next < jobs.length && !signal.aborted) {
       const job = jobs[next++];
+      if (job.dup_of !== null) setProgress(job.id, "duplicate");
       try {
         // 読む直前にパスを検証する（スキャン後・再開までの間の差し替え対策）
         const abs = await safeFilePath(root, job.rel_path);
@@ -314,12 +318,13 @@ async function runScan(scanId: number, root: string, signal: AbortSignal) {
         }
       } catch (e) {
         // 中断で打ち切ったファイルは「未処理」のまま残し、再開時にやり直す
-        if (signal.aborted) return;
+        if (signal.aborted) return clearProgress(job.id);
         d.prepare(`UPDATE files SET status='error', error=? WHERE id=?`).run(
           e instanceof Error ? e.message.slice(0, 500) : String(e),
           job.id,
         );
       }
+      clearProgress(job.id);
       d.prepare(`UPDATE scans SET processed = processed + 1 WHERE id=?`).run(scanId);
     }
   };
@@ -404,6 +409,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
 
   // 性能分析の記録（lib/metrics.ts）に残す、どの棚卸しのどのファイルの処理か
   const ctx: CallContext = { scanId: row.scan_id, fileId: id, ext };
+  setProgress(id, "read");
   let text = "";
   let method = "none";
   const notes: string[] = [];
@@ -425,6 +431,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
 
   // AI 判定。本文はルールでマスクした版を渡す（ローカル LLM だが、出力側に生の番号を残さないため）
   let ai: AiJudgement | null = null;
+  setProgress(id, "judge");
   try {
     ai = await judgeFile({
       relPath: row.rel_path,
@@ -447,7 +454,13 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   let more = { names: [] as string[], readings: [] as string[], truncated: false };
   if (text.trim()) {
     try {
-      more = await collectMoreNames(masked, ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null, signal, ctx);
+      more = await collectMoreNames(
+        masked,
+        ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null,
+        signal,
+        ctx,
+        (step, total) => setProgress(id, "names", step, total),
+      );
       if (more.truncated) notes.push(`本文が長いため、氏名の確認は先頭 ${(JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS).toLocaleString()} 字まで`);
     } catch (e) {
       if (signal.aborted) throw e;
@@ -624,6 +637,68 @@ export function getScan(id: number): { scan: ScanRow; files: Omit<FileRow, "exce
 }
 
 /** 棚卸しの記録だけを返す（ファイルの一覧は含めない）。棚卸しの最中に、進み具合を軽く取るため */
+// ---------------------------------------------------------------- 処理中の様子
+
+/** 処理の段階。read=中身の読み取り（画像は AI の文字起こしを含む）/ judge=AI の判定 / names=氏名の確認 / duplicate=重複（原本の結果を待つ） */
+export type ProgressStage = "read" | "judge" | "names" | "duplicate";
+
+interface ProgressRecord {
+  stage: ProgressStage;
+  step?: number;
+  total?: number;
+  startedAt: string;
+  updatedAt: string;
+}
+
+/** 処理中のファイルの段階を記録する。startedAt（そのファイルの処理を始めた時刻）は引き継ぐ */
+function setProgress(fileId: number, stage: ProgressStage, step?: number, total?: number) {
+  const d = db();
+  const now = new Date().toISOString();
+  const prev = d.prepare(`SELECT progress FROM files WHERE id=?`).get(fileId) as { progress: string | null } | undefined;
+  const startedAt = (prev?.progress ? (JSON.parse(prev.progress) as ProgressRecord).startedAt : null) ?? now;
+  const rec: ProgressRecord = { stage, step, total, startedAt, updatedAt: now };
+  d.prepare(`UPDATE files SET progress=? WHERE id=?`).run(JSON.stringify(rec), fileId);
+}
+
+function clearProgress(fileId: number) {
+  db().prepare(`UPDATE files SET progress=NULL WHERE id=?`).run(fileId);
+}
+
+export interface ScanActivity {
+  /** 処理中のファイル（段階と、そのファイルにかかっている時間） */
+  files: { id: number; relPath: string; stage: ProgressStage; step: number | null; total: number | null; elapsedSec: number }[];
+  /** 最後に動きがあってからの秒数（段階の変化・AI の呼び出しの完了）。動きの記録がなければ null */
+  idleSec: number | null;
+}
+
+/** 棚卸しの画面に出す「いま何をしているか」。ファイルが大きいと、1件終わるまで件数が動かないため */
+export function getScanActivity(scanId: number): ScanActivity {
+  const d = db();
+  const now = Date.now();
+  const rows = d
+    .prepare(`SELECT id, rel_path, progress FROM files WHERE scan_id=? AND status='pending' AND progress IS NOT NULL ORDER BY id`)
+    .all(scanId) as { id: number; rel_path: string; progress: string }[];
+  let last = 0;
+  const files = rows.map((r) => {
+    const p = JSON.parse(r.progress) as ProgressRecord;
+    last = Math.max(last, Date.parse(p.updatedAt));
+    return {
+      id: r.id,
+      relPath: r.rel_path,
+      stage: p.stage,
+      step: p.step ?? null,
+      total: p.total ?? null,
+      elapsedSec: Math.max(0, Math.round((now - Date.parse(p.startedAt)) / 1000)),
+    };
+  });
+  // AI の呼び出しが終わった時刻も「動き」に数える（1回の呼び出しが数十秒かかるため）
+  const call = d
+    .prepare(`SELECT max(julianday(started_at) * 86400000 + duration_ms - 210866760000000) AS t FROM ai_calls WHERE scan_id=?`)
+    .get(scanId) as { t: number | null } | undefined;
+  if (call?.t) last = Math.max(last, call.t);
+  return { files, idleSec: last ? Math.max(0, Math.round((now - last) / 1000)) : null };
+}
+
 export function getScanSummary(id: number): ScanRow | null {
   const row = db().prepare(`SELECT * FROM scans WHERE id=?`).get(id) as ScanRow | undefined;
   return row ? reconcile(row) : null;

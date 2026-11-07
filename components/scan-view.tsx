@@ -27,13 +27,37 @@ const RUNNING = new Set(["queued", "walking", "processing", "pausing"]);
 type Scan = ScanData["scan"];
 type Platform = NonNullable<ScanData["platform"]>;
 
+/** いま処理中のファイルと、最後に動きがあってからの秒数（/api/scans/[id]?files=0 の activity） */
+interface Activity {
+  files: { id: number; relPath: string; stage: "read" | "judge" | "names" | "duplicate"; step: number | null; total: number | null; elapsedSec: number }[];
+  idleSec: number | null;
+}
+
+const STAGE_LABEL: Record<Activity["files"][number]["stage"], string> = {
+  read: "中身を読み取り中",
+  judge: "AI が内容を判定中",
+  names: "氏名を確認中",
+  duplicate: "重複のため、原本の結果を待っています",
+};
+
+/** この秒数より長く動きがなければ、止まっているかもしれないと知らせる（AI の1回の呼び出しの上限より長く） */
+const STALL_SEC = 240;
+
+/** 経過時間を「3分12秒」のように表す */
+function formatElapsed(sec: number): string {
+  if (sec < 60) return `${sec}秒`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}分${sec % 60}秒`;
+  return `${Math.floor(m / 60)}時間${m % 60}分`;
+}
+
 /**
  * 棚卸し結果のページ。棚卸しの進み具合の取得とポーリングを受け持ち、「やること」と「詳しい分析」を切り替える。
  * ファイルの一覧は、それぞれのタブが1ページ分ずつサーバから受け取る。
  */
 export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [data, setData] = useState<{ scan: Scan; platform: Platform } | null>(null);
+  const [data, setData] = useState<{ scan: Scan; platform: Platform; activity?: Activity } | null>(null);
   const [notFound, setNotFound] = useState(false);
   // 再開したときにポーリングをやり直すためのキー
   const [pollKey, setPollKey] = useState(0);
@@ -69,7 +93,7 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
         return null;
       }
       if (!res.ok) return null;
-      const j: { scan: Scan; platform: Platform } = await res.json();
+      const j: { scan: Scan; platform: Platform; activity?: Activity } = await res.json();
       if (stop) return null;
       setData(j);
       return j.scan;
@@ -121,7 +145,7 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
   if (notFound) return <p className="text-sm text-stone-500">このスキャンは見つかりません。</p>;
   if (!data) return <p className="text-sm text-stone-400">読み込み中…</p>;
 
-  const { scan } = data;
+  const { scan, activity } = data;
   const analyzing = RUNNING.has(scan.status);
   const paused = scan.status === "paused";
   const pct = scan.total ? Math.round((scan.processed / scan.total) * 100) : 0;
@@ -160,7 +184,7 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
               </button>
             </div>
             <div
-              className="aqua-progress"
+              className={`aqua-progress ${scan.status === "pausing" ? "" : "aqua-progress-busy"}`}
               role="progressbar"
               aria-label="解析の進み具合"
               aria-valuemin={0}
@@ -169,7 +193,42 @@ export function ScanView({ params }: { params: Promise<{ id: string }> }) {
             >
               {pct > 0 && <div className="aqua-progress-bar aqua-teal" style={{ width: `${pct}%` }} />}
             </div>
+            {activity && activity.files.length > 0 && (
+              <ul className="mt-3 space-y-1" aria-label="処理中のファイル">
+                {activity.files.map((f) => (
+                  <li key={f.id} className="flex items-center gap-2 text-xs text-teal-900">
+                    <span className="relative flex h-2 w-2 shrink-0" aria-hidden>
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal-500 opacity-60 motion-reduce:animate-none" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-teal-600" />
+                    </span>
+                    <span className="min-w-0 truncate font-mono" title={f.relPath}>
+                      {f.relPath}
+                    </span>
+                    <span className="shrink-0 text-teal-800/90">
+                      — {STAGE_LABEL[f.stage]}
+                      {f.stage === "names" && f.step && f.total ? ` ${f.step} / ${f.total}` : ""}
+                    </span>
+                    <span className="ml-auto shrink-0 tabular-nums text-teal-800/70">経過 {formatElapsed(f.elapsedSec)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {activity?.idleSec != null && activity.idleSec >= STALL_SEC && scan.status === "processing" && (
+              <p role="alert" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200">
+                {formatElapsed(activity.idleSec)}以上、処理に動きがありません。ローカル LLM（llama-server）が動いているか確認してください。止まっている場合は「中断」してから「再開」すると、続きから進められます。
+              </p>
+            )}
             <div className="mt-2 space-y-1 text-xs text-teal-900">
+              {scan.status === "processing" && activity?.idleSec != null && activity.idleSec < STALL_SEC && (
+                <p className="text-teal-800/80">
+                  最後の動き: {activity.idleSec < 5 ? "たった今" : `${formatElapsed(activity.idleSec)}前`}
+                  {activity.idleSec >= 5 &&
+                    activity.files.some((f) => f.stage !== "duplicate") &&
+                    "（AI の応答を待っています。1 回に数十秒かかることがあります）"}
+                  {activity.files.some((f) => f.stage === "names") &&
+                    " 長い文書は、氏名の伏せ漏れを防ぐため、区切って AI に確認します。"}
+                </p>
+              )}
               {scan.status === "walking" && (
                 <p>
                   ファイルを数えています（<span className="tabular-nums">{scan.total.toLocaleString()}</span>件まで確認）。数え終わると解析を始めます。

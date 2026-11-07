@@ -162,8 +162,28 @@ body {
       background-position: 22.6px 0, 0 0;
     }
   }
+  /* 処理中: 溝の上を光が流れる（件数が増えない間も、動いていることが分かるように） */
+  .aqua-progress-busy::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 30%;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, transparent, rgb(15 118 110 / 0.5), transparent);
+    animation: aqua-sweep 1.8s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes aqua-sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(340%);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .aqua-progress-bar {
+    .aqua-progress-bar,
+    .aqua-progress-busy::before {
       animation: none;
     }
   }

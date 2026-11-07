@@ -89,6 +89,8 @@ function open(): DatabaseSync {
       input_chars       INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_ai_calls_started ON ai_calls(started_at);
+    -- 棚卸しの画面が2秒ごとに「最後の動き」を調べるため
+    CREATE INDEX IF NOT EXISTS idx_ai_calls_scan ON ai_calls(scan_id);
     CREATE TABLE IF NOT EXISTS ai_file_stats (
       id                   INTEGER PRIMARY KEY AUTOINCREMENT,
       scan_id              INTEGER NOT NULL,
@@ -171,6 +173,11 @@ function open(): DatabaseSync {
   if (!fileCols.some((c) => c.name === "ocr_preview")) {
     // OCR で読み取ったファイルのプレビュー（番号・氏名を伏せた全文と検出位置の JSON）。OCR のやり直しを避けるため
     db.exec(`ALTER TABLE files ADD COLUMN ocr_preview TEXT`);
+  }
+  if (!fileCols.some((c) => c.name === "progress")) {
+    // 処理中のファイルの段階（{ stage, step, total, startedAt, updatedAt } の JSON）。終わったら NULL に戻す。
+    // 棚卸しの画面に「いま何をしているか」を出すため（ファイルが大きいと、1件終わるまで件数が動かない）
+    db.exec(`ALTER TABLE files ADD COLUMN progress TEXT`);
   }
   return db;
 }
