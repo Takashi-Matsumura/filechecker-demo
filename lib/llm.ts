@@ -393,6 +393,8 @@ export async function collectMoreNames(
   judged: { names: string[]; readings: string[] } | null,
   signal?: AbortSignal,
   ctx?: CallContext,
+  /** 区切りを1つ聞き始めるたびに呼ぶ（棚卸しの画面に「氏名の確認 3 / 10」と出すため） */
+  onStep?: (step: number, total: number) => void,
 ): Promise<{ names: string[]; readings: string[]; truncated: boolean }> {
   const capped = !judged || judged.names.length >= JUDGE_NAME_CAP || judged.readings.length >= JUDGE_NAME_CAP;
   const names: string[] = [];
@@ -415,9 +417,14 @@ export async function collectMoreNames(
   for (let start = 0; start < maskedText.length; start += JUDGE_TEXT_CHARS) {
     chunks.push(maskedText.slice(Math.max(0, start - CHUNK_OVERLAP), start + JUDGE_TEXT_CHARS));
   }
-  for (const [i, chunk] of chunks.slice(0, MAX_NAME_CHUNKS).entries()) {
+  const targets = chunks.slice(0, MAX_NAME_CHUNKS);
+  // 聞き直す区切りの数（先頭の区切りは、判定が上限に達していなければ聞き直さない）
+  const steps = targets.length - (capped ? 0 : 1);
+  let step = 0;
+  for (const [i, chunk] of targets.entries()) {
     // 先頭の区切りは判定が見ているので、判定が上限に達していなければ聞き直さない
     if (i === 0 && !capped) continue;
+    onStep?.(++step, steps);
     for (let round = 0; round < 3; round++) {
       signal?.throwIfAborted();
       const r = await extractNames(chunk, [...(judged?.names ?? []), ...(judged?.readings ?? []), ...names, ...readings], signal, ctx);
