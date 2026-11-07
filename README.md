@@ -71,6 +71,17 @@
 
 > 画面写真は、`npm run testdata` で生成する**架空のデータ**を使っています。
 
+## 紹介動画
+
+画面右上の「紹介動画」から、社内向けの紹介動画（約 6 分）を再生できます。このアプリで何ができるか、なぜローカル AI を使うのか、AI の限界（間違える・全部は見ていない・推奨は提案）と、最終的に利用者が責任を持って棚卸しをすることを、実際の操作画面と注目点を示しながら説明します。
+
+動画はリポジトリに入れず、台本（`docs/video/script.json`）から作ります。読み上げは VOICEVOX（本番の Mac Studio で使う想定）で、作り方は [docs/video/README.md](docs/video/README.md) にあります。
+
+```bash
+node docs/video/build.mjs            # VOICEVOX のエンジン（http://127.0.0.1:50021）を起動しておく
+node docs/video/build.mjs --tts=say  # VOICEVOX が無いときは macOS の読み上げ音声で作る
+```
+
 ## 仕組み
 
 ### 全体像
@@ -342,6 +353,7 @@ AI の精度は CI では測りません（llama-server が要るため）。検
 | `SCAN_ALLOWED_ROOTS` | ホームディレクトリ | 棚卸しを許可するフォルダ（mac・Linux は `:`、Windows は `;` 区切りで複数指定）。共有フォルダを棚卸しするときは、マウント先を加える |
 | `SCAN_MAX_FILES` | `100000` | 1 回のスキャンで扱う最大ファイル数。極端に大きなフォルダのときだけ働く安全のための上限で、超えた分は棚卸しせず画面に「上限で打ち切り」と表示する。ファイルが多いと時間がかかる（1 件あたり数秒。1 万件で半日ほど）ので、PC がスリープしない設定にしておく。途中で止まっても「再開」で続きから進められる |
 | `DB_PATH` | `data/filechecker.db` | 結果の保存先 |
+| `INTRO_VIDEO_PATH` | `docs/video/out/intro.mp4` | 「紹介動画」の画面で再生する動画（`node docs/video/build.mjs` で作る） |
 
 ## ディレクトリ構成
 

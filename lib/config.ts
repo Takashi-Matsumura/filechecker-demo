@@ -53,4 +53,6 @@ export const config = {
 
   /** SQLite の保存先 */
   dbPath: process.env.DB_PATH ?? path.join(process.cwd(), "data", "filechecker.db"),
+  /** 紹介動画（docs/video/build.mjs で作る）。アプリの「紹介動画」の画面で再生する */
+  introVideoPath: process.env.INTRO_VIDEO_PATH ?? path.join(process.cwd(), "docs", "video", "out", "intro.mp4"),
 } as const;
