@@ -19,6 +19,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               ファイル棚卸しアシスタント
             </Link>
             <div className="flex items-center gap-3">
+              <Link href="/guide" className="text-xs text-stone-600 underline-offset-2 hover:text-teal-700 hover:underline">
+                紹介動画
+              </Link>
               <Link href="/ai" className="text-xs text-stone-600 underline-offset-2 hover:text-teal-700 hover:underline">
                 AI の分析
               </Link>
