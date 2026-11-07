@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import random
@@ -527,7 +529,41 @@ def generate_hard(out: Path) -> list[tuple[str, str]]:
         "製品コード: 0120-345-678-9\n"
         "ロット: 2025-0520-0001\n", encoding="utf-8")
 
+    # 社内の数値の表（個人情報なし）。金額の入り方や機密表示の有無で、AI の判定が揺れないかを見る
+    p = add("事業部別_予算実績.csv", "社内の予算・実績の表（Shift_JIS・数式つき）: 機密表示なし・個人情報なし")
+    p.write_bytes(budget_csv(nonzero=True))
+    p = add("事業部別_予算実績_未入力.csv", "上と同じ形で金額が未入力（0）の表: 機密表示なし・個人情報なし")
+    p.write_bytes(budget_csv(nonzero=False))
+    p = add("予算実績_社外秘.csv", "上と同じ形で先頭に「社外秘」の表示がある表: 機密表示あり・個人情報なし")
+    p.write_bytes(budget_csv(nonzero=True, mark="【社外秘】2026年度 事業部別予算実績（経営会議資料）"))
+
     return manifest
+
+
+def budget_csv(nonzero: bool, mark: str | None = None) -> bytes:
+    """事業部別・月別の予算・実績・達成率の表（社内の古い CSV に多い Shift_JIS で、達成率は Excel の数式）。"""
+    rnd = random.Random(7)  # ほかのファイルの乱数の並びを変えないよう、専用の乱数を使う
+    months = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3]
+    header = ["科目名称", "前期実績"] + [c for m in months for c in (f"{m}月予算", "実績", "達成率")]
+    divisions = ["8160 ITコンサルティング", "8170 システム開発", "8180 保守サービス",
+                 "8190 クラウド運用", "8210 教育研修", "8220 製品販売"]
+    items = ["売上高", "売上原価", "人件費", "外注費", "旅費交通費", "通信費", "減価償却費", "営業利益"]
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\r\n")
+    if mark:
+        w.writerow([mark])
+    w.writerow(header)
+    r = 2
+    for d in divisions:
+        for it in items:
+            row: list[object] = [f"{d} {it}", rnd.randint(100, 9000) if nonzero else 0]
+            for _ in months:
+                b = rnd.randint(100, 3000) if nonzero else 0
+                a = int(b * rnd.uniform(0.7, 1.3)) if nonzero else 0
+                row += [b, a, f'=IF(C{r} = 0, "", IF(C{r} > 0, D{r}/C{r}*100, C{r}/D{r}*100))']
+            w.writerow(row)
+            r += 1
+    return buf.getvalue().encode("cp932")
 
 
 def expected_hard() -> dict[str, dict]:
@@ -568,6 +604,11 @@ def expected_hard() -> dict[str, dict]:
                                       fullwidth_digits("980-0811"), "１９７９年４月１５日"]},
         "番号っぽいが個人情報ではない.txt": {"types": [], "names": [], "readings": [], "risk": ["none", "low"],
                                     "recommendation": ["keep", "archive", "review"]},
+        # 社内の数値の表は、金額の有無にかかわらず機密表示が無ければ問題なし。表示があれば「中」
+        "事業部別_予算実績.csv": {"types": [], "names": [], "readings": [], "risk": ["none", "low"], "recommendation": ["keep"]},
+        "事業部別_予算実績_未入力.csv": {"types": [], "names": [], "readings": [], "risk": ["none", "low"], "recommendation": ["keep"]},
+        "予算実績_社外秘.csv": {"types": ["confidential"], "names": [], "readings": [], "risk": ["medium"],
+                             "recommendation": ["restrict", "review"]},
     }
 
 

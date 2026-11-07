@@ -246,5 +246,43 @@
       "archive",
       "review"
     ]
+  },
+  "事業部別_予算実績.csv": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "keep"
+    ]
+  },
+  "事業部別_予算実績_未入力.csv": {
+    "types": [],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "none",
+      "low"
+    ],
+    "recommendation": [
+      "keep"
+    ]
+  },
+  "予算実績_社外秘.csv": {
+    "types": [
+      "confidential"
+    ],
+    "names": [],
+    "readings": [],
+    "risk": [
+      "medium"
+    ],
+    "recommendation": [
+      "restrict",
+      "review"
+    ]
   }
 }
