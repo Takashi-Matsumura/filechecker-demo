@@ -204,7 +204,12 @@ export function ActionList({ scanId, root, platform, refreshKey, incomplete, pau
         </p>
       )}
 
-      {view.okCount > 0 && <p className="text-sm text-stone-500">問題なし {view.okCount.toLocaleString()}件（何もしなくて大丈夫です）</p>}
+      {/* 「問題なし」は、問題が見つからなかったという意味で、入っていないことの保証ではない（AI の見落とし・確認していない範囲がある） */}
+      {view.okCount > 0 && (
+        <p className="text-sm text-stone-500">
+          問題が見つからなかったファイル {view.okCount.toLocaleString()}件（入っていないことの保証ではありません。気になるファイルは中身を確かめてください）
+        </p>
+      )}
 
       {toast && (
         <div

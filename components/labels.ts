@@ -14,7 +14,7 @@ export const RECOMMENDATION: Record<string, { label: string; hint: string; class
   delete: { label: "削除を検討", hint: "目的を終えた可能性", className: "text-violet-700" },
   archive: { label: "アーカイブ", hint: "古い資料として退避", className: "text-sky-700" },
   review: { label: "要確認", hint: "人の判断が必要", className: "text-amber-700" },
-  keep: { label: "そのまま", hint: "問題なし", className: "text-stone-500" },
+  keep: { label: "そのまま", hint: "問題は見つからず", className: "text-stone-500" },
 };
 
 export const METHOD: Record<string, string> = {
