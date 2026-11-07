@@ -55,4 +55,8 @@ export const config = {
   dbPath: process.env.DB_PATH ?? path.join(process.cwd(), "data", "filechecker.db"),
   /** 紹介動画（docs/video/build.mjs で作る）。アプリの「紹介動画」の画面で再生する */
   introVideoPath: process.env.INTRO_VIDEO_PATH ?? path.join(process.cwd(), "docs", "video", "out", "intro.mp4"),
+  /** 紹介動画のサムネイル（build.mjs が動画と同じフォルダに書き出す .jpg）。トップ画面に表示する */
+  get introThumbnailPath() {
+    return this.introVideoPath.replace(/\.mp4$/i, "") + ".jpg";
+  },
 } as const;

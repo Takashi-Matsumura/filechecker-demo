@@ -284,5 +284,18 @@ if (!framesOnly) {
   const video = path.join(out, "intro.mp4");
   execFileSync("ffmpeg", ["-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-movflags", "+faststart", video]);
   fs.writeFileSync(path.join(out, "intro.srt"), srt.join("\n"));
+  // アプリのトップ画面に置くサムネイル。字幕の帯は入れず、タイトルを上寄りにして、下に再生ボタンを置く余白をとる
+  const minutes = Math.max(1, Math.round(t / 60));
+  const thumbHtml = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>${CSS}
+    .thumb { position: absolute; inset: 0; padding: 150px 120px 0; display: flex; flex-direction: column; align-items: center; text-align: center; }
+    .thumb .kicker { font-size: 40px; color: #0f766e; font-weight: 800; letter-spacing: .3em; margin-bottom: 40px; }
+    .thumb h1 { font-size: 104px; }
+    .thumb .sub { margin-top: 44px; font-size: 52px; color: #0f766e; font-weight: 700; }
+    .thumb .len { margin-top: 36px; font-size: 36px; color: #78716c; font-weight: 600; }
+  </style></head><body><div class="thumb"><div class="kicker">紹介動画</div><h1>${esc(script.scenes[0].title)}</h1>` +
+    `<div class="sub">${esc(script.scenes[0].subtitle ?? "")}</div><div class="len">約 ${minutes} 分</div></div></body></html>`;
+  const thumbPng = path.join(work, "thumbnail.png");
+  renderFrame(thumbHtml, thumbPng);
+  execFileSync("ffmpeg", ["-y", "-v", "error", "-i", thumbPng, "-vf", "scale=1280:720", "-q:v", "3", path.join(out, "intro.jpg")]);
   console.log(`できました: ${video}（${Math.round(t)} 秒、音声: ${engine}）`);
 }
