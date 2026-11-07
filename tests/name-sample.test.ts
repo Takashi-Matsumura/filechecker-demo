@@ -1,5 +1,5 @@
 /**
- * 氏名の確認に使う見本づくり（lib/extract.ts の sampleSections）と、伏せ字の前後の位置の変換
+ * 氏名の確認に使う見本づくり（lib/name-text.ts の sampleSections）と、伏せ字の前後の位置の変換
  * （lib/detect.ts の toRedactedOffsets）の単体テスト。実行: npm test
  */
 import assert from "node:assert/strict";
@@ -9,7 +9,7 @@ import { createJiti } from "jiti";
 
 const root = path.resolve(import.meta.dirname, "..");
 const jiti = createJiti(import.meta.url, { alias: { "@/": `${root}/` } });
-const { sampleSections } = await jiti.import<typeof import("../lib/extract.ts")>(path.join(root, "lib/extract.ts"));
+const { sampleSections } = await jiti.import<typeof import("../lib/name-text.ts")>(path.join(root, "lib/name-text.ts"));
 const { detect, redact, toRedactedOffsets } = await jiti.import<typeof import("../lib/detect.ts")>(path.join(root, "lib/detect.ts"));
 
 /** シート名と本文から、抽出結果と同じ形の本文と区切りを作る */

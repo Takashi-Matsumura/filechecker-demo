@@ -1,4 +1,6 @@
 import { config } from "./config";
+import type { TextSection } from "./extract";
+import { condenseForNames, sampleSections, toCondensedOffset, toOriginalOffset, wordsOf } from "./name-text";
 import { markParseError, promptVersion, recordAiCall, type CallContext, type CallKind, type ErrorKind } from "./metrics";
 
 /**
@@ -382,12 +384,23 @@ ${text}
   }
 }
 
+/** 氏名の補完で、本文のどこまでを AI が確認したか */
+export type NamesCoverage =
+  /** 最後まで確認した（新しい語の無い行は省いた） */
+  | { kind: "full" }
+  /** 先頭から origChars 字まで確認した（本文は全 total 字） */
+  | { kind: "partial"; origChars: number; total: number }
+  /** 区切り（Excel のシート）ごとに頭の部分を確認した */
+  | { kind: "sampled"; covered: number };
+
 /**
  * 判定（judgeFile）で拾いきれない氏名・読み仮名を補う。
  * 判定は本文の先頭 JUDGE_TEXT_CHARS 字しか見ず、氏名も JUDGE_NAME_CAP 件までしか返さないため、
  * 判定が上限に達したとき・本文がそれより長いとき・判定に失敗したときに、本文を区切って氏名だけを聞き直す。
+ * 聞き直す本文は、それまでに見せていない語を含む行だけに絞る（condenseForNames）。数字やくり返しの多い表は大きく縮み、
+ * 同じ回数の呼び出し（最大 MAX_NAME_CHUNKS 区切り）で最後まで確認できる。それでも長い本文で、区切り（Excel のシート）が
+ * 複数あるときは、各区切りの頭から均等に切り出す（sampleSections）。
  * 区切りごとに、見つけ済みの氏名を除いて聞き、上限に達したら同じ区切りを最大3回まで聞き直す。
- * truncated: 本文が長く、先頭 MAX_NAME_CHUNKS 区切りまでしか見ていない
  */
 export async function collectMoreNames(
   maskedText: string,
@@ -396,7 +409,9 @@ export async function collectMoreNames(
   ctx?: CallContext,
   /** 区切りを1つ聞き始めるたびに呼ぶ（棚卸しの画面に「氏名の確認 3 / 10」と出すため） */
   onStep?: (step: number, total: number) => void,
-): Promise<{ names: string[]; readings: string[]; truncated: boolean }> {
+  /** 本文の区切り（Excel のシート）。位置は maskedText 上のもの */
+  sections?: TextSection[],
+): Promise<{ names: string[]; readings: string[]; coverage: NamesCoverage }> {
   const capped = !judged || judged.names.length >= JUDGE_NAME_CAP || judged.readings.length >= JUDGE_NAME_CAP;
   const names: string[] = [];
   const readings: string[] = [];
@@ -414,18 +429,36 @@ export async function collectMoreNames(
     return added;
   };
 
-  const chunks: string[] = [];
-  for (let start = 0; start < maskedText.length; start += JUDGE_TEXT_CHARS) {
-    chunks.push(maskedText.slice(Math.max(0, start - CHUNK_OVERLAP), start + JUDGE_TEXT_CHARS));
+  // 判定が上限に達していなければ、判定が見た先頭は聞き直さない（境目の行は、判定が途中までしか見ていないので聞き直す）
+  if (!capped && maskedText.length <= JUDGE_TEXT_CHARS) return { names, readings, coverage: { kind: "full" } };
+  const headEnd = capped ? 0 : maskedText.lastIndexOf("\n", JUDGE_TEXT_CHARS) + 1;
+  const condensed = condenseForNames(maskedText.slice(headEnd), wordsOf(maskedText.slice(0, headEnd)), headEnd);
+  const maxChunks = MAX_NAME_CHUNKS - (capped ? 0 : 1);
+  const budget = JUDGE_TEXT_CHARS * maxChunks;
+
+  let text = condensed.text;
+  let coverage: NamesCoverage = { kind: "full" };
+  const sheets = sections?.filter((x) => x.label !== "コメント") ?? [];
+  if (text.length > budget) {
+    if (sections && sheets.length > 1) {
+      // 区切りの位置を、縮めた本文の位置に直して、各区切りの頭から切り出す
+      const mapped = sections.map((x) => ({ label: x.label, start: toCondensedOffset(condensed, x.start) }));
+      const sample = sampleSections(text, mapped, 0, budget);
+      text = sample.text;
+      coverage = { kind: "sampled", covered: Math.min(sample.covered, sheets.length) };
+    } else {
+      text = text.slice(0, budget);
+      coverage = { kind: "partial", origChars: toOriginalOffset(condensed, budget), total: maskedText.length };
+    }
   }
-  const targets = chunks.slice(0, MAX_NAME_CHUNKS);
-  // 聞き直す区切りの数（先頭の区切りは、判定が上限に達していなければ聞き直さない）
-  const steps = targets.length - (capped ? 0 : 1);
-  let step = 0;
+
+  const chunks: string[] = [];
+  for (let start = 0; start < text.length; start += JUDGE_TEXT_CHARS) {
+    chunks.push(text.slice(Math.max(0, start - CHUNK_OVERLAP), start + JUDGE_TEXT_CHARS));
+  }
+  const targets = chunks.filter((c) => c.trim()).slice(0, maxChunks);
   for (const [i, chunk] of targets.entries()) {
-    // 先頭の区切りは判定が見ているので、判定が上限に達していなければ聞き直さない
-    if (i === 0 && !capped) continue;
-    onStep?.(++step, steps);
+    onStep?.(i + 1, targets.length);
     for (let round = 0; round < 3; round++) {
       signal?.throwIfAborted();
       const r = await extractNames(chunk, [...(judged?.names ?? []), ...(judged?.readings ?? []), ...names, ...readings], signal, ctx);
@@ -434,5 +467,5 @@ export async function collectMoreNames(
       if ((r.person_names.length < NAMES_CAP && r.name_readings.length < NAMES_CAP) || added === 0) break;
     }
   }
-  return { names, readings, truncated: chunks.length > MAX_NAME_CHUNKS };
+  return { names, readings, coverage };
 }
