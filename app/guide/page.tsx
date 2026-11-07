@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { BackLink } from "@/components/back-link";
 import { IntroVideo } from "@/components/intro-video";
 
 export const metadata: Metadata = {
@@ -10,8 +11,11 @@ export default function GuidePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">紹介動画（約 6 分）</h1>
-        <p className="mt-1 text-sm text-stone-600">使い始める前に、一度ご覧ください。このアプリで何ができるか、なぜローカル AI を使うのか、そして AI に任せきりにしてはいけない理由を説明しています。</p>
+        <div className="flex items-center gap-3">
+          <BackLink href="/" label="ホームに戻る" />
+          <h1 className="text-xl font-semibold">紹介動画（約 6 分）</h1>
+        </div>
+        <p className="mt-2 text-sm text-stone-600">使い始める前に、一度ご覧ください。このアプリで何ができるか、なぜローカル AI を使うのか、そして AI に任せきりにしてはいけない理由を説明しています。</p>
       </div>
       <IntroVideo />
       <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">

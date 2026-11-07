@@ -5,7 +5,7 @@ import { ScanStarter } from "@/components/scan-starter";
 export default function Home() {
   return (
     <div className="space-y-10">
-      <section className="grid items-start gap-6 md:grid-cols-[1fr_20rem]">
+      <section className="grid items-start gap-6 md:grid-cols-[1fr_15rem]">
         <div className="space-y-2">
           <h1 className="text-2xl font-bold tracking-tight">フォルダを棚卸しする</h1>
           <p className="max-w-3xl text-sm leading-relaxed text-stone-600">
@@ -14,7 +14,7 @@ export default function Home() {
             ファイルの中身がこの PC の外に送られることはありません。
           </p>
         </div>
-        {/* 紹介動画のサムネイル。押すとその場で再生する（動画が無ければ表示しない） */}
+        {/* 紹介動画のサムネイル。押すと紹介動画の画面に移る（動画が無ければ表示しない） */}
         <IntroVideoCard />
       </section>
       <ScanStarter />

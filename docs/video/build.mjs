@@ -71,19 +71,34 @@ ul.bullets li::before { content: ""; flex: none; width: 22px; height: 22px; bord
 .window .top { height: 44px; background: #e7e5e4; display: flex; align-items: center; gap: 12px; padding: 0 20px; flex: none; }
 .window .top i { width: 16px; height: 16px; border-radius: 50%; background: #a8a29e; display: block; }
 .window .view { background-repeat: no-repeat; }
-/* ローカル AI */
-.local { display: grid; grid-template-columns: 900px 1fr; gap: 60px; align-items: center; flex: 1; }
-.diagram { position: relative; height: 560px; }
-.pc { position: absolute; left: 0; top: 70px; width: 470px; height: 420px; border: 8px solid #0f766e; border-radius: 34px; background: #fff;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
-.pc .label { position: absolute; top: -36px; left: 30px; background: #f6f4f0; padding: 0 16px; font-size: 34px; font-weight: 800; color: #0f766e; }
-.pill { font-size: 36px; font-weight: 800; padding: 22px 34px; border-radius: 20px; }
-.pill.ai { background: #ccfbf1; color: #115e59; }
-.pill.file { background: #f5f5f4; color: #44403c; }
-.cloud { position: absolute; left: 650px; top: 205px; width: 230px; height: 150px; border: 6px dashed #a8a29e; border-radius: 80px;
-  display: flex; align-items: center; justify-content: center; font-size: 28px; color: #78716c; font-weight: 700; text-align: center; line-height: 1.3; }
-.cross { position: absolute; left: 515px; top: 215px; font-size: 96px; color: #dc2626; font-weight: 900; }
-.local ul.bullets li { font-size: 40px; text-wrap: balance; }
+/* ローカル AI（社内ネットワークの図） */
+.net { position: relative; height: 540px; margin-top: 6px; }
+.net .dim { opacity: .25; }
+.net .card { position: absolute; background: #fff; border-radius: 26px; box-shadow: 0 10px 30px rgba(28,25,23,.10); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.net .card h3 { font-size: 34px; font-weight: 800; line-height: 1.3; }
+.net .card p { font-size: 26px; color: #57534e; font-weight: 600; margin-top: 10px; }
+.net .lan { position: absolute; left: 0; top: 30px; width: 1270px; height: 500px; border: 8px solid #0f766e; border-radius: 36px; background: rgba(204,251,241,.35); }
+.net .lan .label { position: absolute; top: -30px; left: 36px; background: #f6f4f0; padding: 0 18px; font-size: 36px; font-weight: 800; color: #0f766e; }
+.net .pcs { left: 30px; top: 90px; width: 260px; height: 250px; }
+.net .pcs .icons { display: flex; gap: 12px; margin-bottom: 16px; }
+.net .pcs svg { width: 58px; height: 52px; color: #44403c; }
+.net .link { position: absolute; left: 294px; top: 186px; width: 84px; text-align: center; font-size: 22px; font-weight: 800; color: #57534e; line-height: 1.2; }
+.net .link::after { content: ""; display: block; height: 6px; background: #78716c; border-radius: 3px; margin-top: 6px; }
+.net .server { left: 382px; top: 70px; width: 410px; height: 290px; }
+.net .server .pills { display: flex; gap: 14px; margin-top: 18px; }
+.net .server .pills span { font-size: 28px; font-weight: 800; padding: 10px 20px; border-radius: 14px; background: #ccfbf1; color: #115e59; }
+.net .read { position: absolute; left: 798px; top: 186px; width: 74px; text-align: center; font-size: 24px; font-weight: 800; color: #0f766e; }
+.net .read::after { content: ""; display: block; height: 6px; background: #0f766e; border-radius: 3px; margin-top: 6px; }
+.net .share { left: 878px; top: 100px; width: 350px; height: 230px; }
+.net .inside { position: absolute; left: 0; right: 0; bottom: 40px; text-align: center; font-size: 34px; font-weight: 800; color: #115e59; }
+.net .wire { position: absolute; left: 1270px; top: 243px; width: 190px; border-top: 6px dashed #dc2626; }
+.net .block { position: absolute; left: 1280px; top: 186px; width: 170px; display: flex; flex-direction: column; align-items: center; }
+.net .stop { width: 112px; height: 112px; border-radius: 50%; background: #dc2626; border: 8px solid #fff; box-shadow: 0 8px 20px rgba(220,38,38,.35); display: flex; align-items: center; justify-content: center; }
+.net .stop i { display: block; width: 56px; height: 14px; background: #fff; border-radius: 4px; }
+.net .block b { margin-top: 12px; font-size: 30px; font-weight: 900; color: #b91c1c; background: #fff; padding: 4px 14px; border-radius: 10px; white-space: nowrap; }
+.net .cloud { position: absolute; left: 1460px; top: 134px; width: 220px; height: 220px; border: 6px dashed #a8a29e; border-radius: 110px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #78716c; }
+.net .cloud h3 { font-size: 25px; font-weight: 800; }
+.net .cloud p { font-size: 22px; font-weight: 700; margin-top: 8px; line-height: 1.3; }
 /* 二段構え */
 .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; margin-top: 10px; }
 .col { background: #fff; border-radius: 28px; padding: 50px 56px; box-shadow: 0 10px 30px rgba(28,25,23,.08); }
@@ -152,11 +167,25 @@ function stage(scene, line) {
         .join("");
       return `<div class="stage screen"><div class="chip">${esc(scene.title)}</div><div class="shot"><div class="window"><div class="top"><i></i><i></i><i></i></div><div class="view" style="${view}">${marks}</div></div></div></div>`;
     }
-    case "local":
-      return `<div class="stage"><h1>${esc(scene.title)}</h1><div class="bar"></div><div class="local"><div class="diagram">
-        <div class="pc"><div class="label">この PC</div><div class="pill ai">ローカル AI</div><div class="pill file">棚卸しするファイル</div></div>
-        <div class="cross">✕</div><div class="cloud">インターネット<br>（社外の AI）</div></div>
-        <ul class="bullets">${scene.bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul></div></div>`;
+    case "local": {
+      // セリフの focus（pcs / server / block）で、図のどこの話かを強調する（ほかは薄くする）
+      const f = line.focus ?? [];
+      const dim = (k) => (f.length && !f.includes(k) ? "dim" : "");
+      const pc = `<svg viewBox="0 0 32 28" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><rect x="2" y="2" width="28" height="18" rx="2"/><path d="M11 26h10M16 20v6"/></svg>`;
+      return `<div class="stage"><h1>${esc(scene.title)}</h1><div class="bar" style="margin-bottom:30px"></div><div class="net">
+        <div class="lan"><div class="label">社内ネットワーク</div>
+          <div class="card pcs ${dim("pcs")}"><div class="icons">${pc}${pc}${pc}</div><h3>社員の PC</h3><p>ブラウザで使う</p></div>
+          <div class="link ${dim("pcs")}">社内<br>LAN</div>
+          <div class="card server ${dim("server")}"><h3>社内サーバ<br>（Mac Studio）</h3><div class="pills"><span>このアプリ</span><span>ローカル AI</span></div></div>
+          <div class="read ${dim("server")}">読む</div>
+          <div class="card share ${dim("server")}"><h3>共有フォルダ</h3><p>棚卸しするファイル</p></div>
+          <div class="inside ${f.length ? "dim" : ""}">ファイルの中身も、AI の処理も、この中だけ</div>
+        </div>
+        <div class="wire ${dim("block")}"></div>
+        <div class="block ${dim("block")}"><div class="stop"><i></i></div><b>外に送らない</b></div>
+        <div class="cloud ${dim("block")}"><h3>インターネット</h3><p>社外の<br>AI サービス</p></div>
+      </div></div>`;
+    }
     case "columns":
       return `<div class="stage"><h1>${esc(scene.title)}</h1><div class="bar"></div><div class="columns">${scene.columns
         .map((c, i) => `<div class="col ${i === 1 ? "ai" : ""}"><h2>${esc(c.head)}</h2><ul>${c.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`)
