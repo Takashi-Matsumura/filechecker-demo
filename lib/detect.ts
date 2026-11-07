@@ -103,7 +103,7 @@ function maskAddress(s: string): string {
  */
 const PD = "[0-9０-９]"; // 数字
 const PH = "[-－‐−ー]"; // 区切り（ハイフン類）
-const PS = "[\\s　\\-－‐−ー]"; // 国際の形の区切り（空白も可）
+const PS = "[ 　\\-－‐−ー]"; // 国際の形の区切り（空白も可。タブ・改行は表のセルや行の境目なので含めない）
 const NOT_BEFORE = "(?<![0-9０-９\\-－‐−ー])";
 const NOT_AFTER = "(?![0-9０-９\\-－‐−ー])";
 const PLUS81 = "[+＋][8８][1１]";
@@ -132,9 +132,18 @@ interface Rule {
 /** 文書そのものに付ける機密の表示。これがあれば、その文書は機密として扱われている */
 const CONFIDENTIAL_MARK = /社外秘|部外秘|関係者外秘|極秘|取扱注意|confidential/i;
 
-/** 番号の数字（半角・全角）と区切り（空白・ハイフン類・長音記号。全角を含む） */
+/**
+ * 番号の数字（半角・全角）と区切り（空白・ハイフン類・長音記号。全角を含む）。
+ * タブと改行は区切りに含めない。表（Excel・CSV）では隣のセルや行の数字がつながり、番号に見えてしまうため
+ */
 const ND = "[0-9０-９]";
-const NS = "[\\s　\\-－‐−ー]";
+const NS = "[ 　\\-－‐−ー]";
+/**
+ * 小数の一部ではないこと。Excel は小数を「12.345678901234567」のように長い桁で保存するので、
+ * 小数点の後ろの桁をカード番号やマイナンバーと見なさない（「No.4111…」のような、数字でない文字の後の点は構わない）
+ */
+const NOT_DECIMAL_BEFORE = `(?<!${ND}[.．])`;
+const NOT_DECIMAL_AFTER = `(?![.．]${ND})`;
 /** 番号から数字だけを取り出す（全角の数字は半角にそろえる。チェックデジットなどの検査用） */
 const digitsOf = (s: string) => s.normalize("NFKC").replace(/\D/g, "");
 /** 日付の区切り（年 / . - と、その全角） */
@@ -147,14 +156,14 @@ const RULES: Rule[] = [
     type: "mynumber",
     level: "high",
     // 名簿や手入力では全角で書かれることがあるので、全角の数字・区切りも受け付ける（電話番号と同じ）
-    re: new RegExp(`(?<!${ND}${NS}?)${ND}{4}${NS}?${ND}{4}${NS}?${ND}{4}(?!${NS}?${ND})`, "g"),
+    re: new RegExp(`(?<!${ND}${NS}?)${NOT_DECIMAL_BEFORE}${ND}{4}${NS}?${ND}{4}${NS}?${ND}{4}(?!${NS}?${ND})${NOT_DECIMAL_AFTER}`, "g"),
     accept: (m) => isValidMyNumber(digitsOf(m[0])),
     mask: (s) => maskDigitsKeepLast(s, 0),
   },
   {
     type: "credit_card",
     level: "high",
-    re: new RegExp(`(?<!${ND}${NS}?)[3-6３-６](?:${ND}${NS}?){12,17}${ND}(?!${NS}?${ND})`, "g"),
+    re: new RegExp(`(?<!${ND}${NS}?)${NOT_DECIMAL_BEFORE}[3-6３-６](?:${ND}${NS}?){12,17}${ND}(?!${NS}?${ND})${NOT_DECIMAL_AFTER}`, "g"),
     accept: (m) => {
       const d = digitsOf(m[0]);
       return d.length >= 14 && d.length <= 16 && isLuhn(d);

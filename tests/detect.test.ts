@@ -117,6 +117,18 @@ describe("番号の検出", () => {
     assert.deepEqual(typesOf("運転免許証のコピー"), ["id_document"]);
     assert.deepEqual(typesOf("この資料は社外秘です"), ["confidential"]);
   });
+  it("小数の桁や、表の隣り合うセルの数字は、カード番号・マイナンバーと見なさない", () => {
+    // Excel は小数を長い桁で保存する（小数点の後ろの 15〜17 桁が Luhn に通ることがある）
+    assert.deepEqual(typesOf(`12.${CARD}\t5`), []);
+    assert.deepEqual(typesOf(`${CARD}.5`), []);
+    assert.deepEqual(typesOf(`0.${MYNUMBER}`), []);
+    // タブ（セルの境目）・改行（行の境目）でつながった数字
+    assert.deepEqual(typesOf(`${CARD.slice(0, 4)}\t${CARD.slice(4, 8)}\t${CARD.slice(8, 12)}\t${CARD.slice(12)}`), []);
+    assert.deepEqual(typesOf(`${MYNUMBER.slice(0, 4)}\n${MYNUMBER.slice(4, 8)}\n${MYNUMBER.slice(8)}`), []);
+    // 数字でない文字の後の点や、空白・ハイフンの区切りは、これまでどおり番号として拾う
+    assert.deepEqual(typesOf(`カードNo.${CARD}`), ["credit_card"]);
+    assert.deepEqual(typesOf(`番号 ${MYNUMBER.slice(0, 4)} ${MYNUMBER.slice(4, 8)} ${MYNUMBER.slice(8)}`), ["mynumber"]);
+  });
   it("カード番号と重なる一致は、ほかの種類として数えない", () => {
     assert.deepEqual(typesOf(`カード ${CARD}`), ["credit_card"]);
   });

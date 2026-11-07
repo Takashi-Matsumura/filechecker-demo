@@ -8,10 +8,26 @@ import type { CallContext } from "./metrics";
 export class ExtractLimitError extends Error {}
 
 /** Office 形式ごとに展開する XML（これ以外は展開しない） */
-const WANTED_ENTRIES: Record<string, RegExp> = {
+const WANTED_ENTRIES: Record<OfficeFormat, RegExp> = {
   docx: /^word\/(document|header\d*|footer\d*)\.xml$/,
   pptx: /^ppt\/(slides\/slide|notesSlides\/notesSlide)\d+\.xml$/,
-  xlsx: /^xl\/(sharedStrings|worksheets\/sheet\d+)\.xml$/,
+  // シートの本文・共有文字列に加えて、シートの名前と順番（workbook.xml とその関連づけ）、セルのコメントも読む
+  // コメントの置き場所はソフトによって違う（Excel は xl/comments1.xml、ほかのソフトでは xl/comments/comment1.xml など）
+  xlsx: /^xl\/(sharedStrings|workbook|worksheets\/sheet\d+|comments\d+|comments\/comment\d+|threadedComments\/threadedComment\d+)\.xml$|^xl\/_rels\/workbook\.xml\.rels$/,
+};
+
+type OfficeFormat = "docx" | "xlsx" | "pptx";
+/**
+ * 拡張子ごとの、中身の形式。マクロ付き（.docm / .xlsm / .pptm）も中身の XML は同じ形式なので、同じように読む
+ * （マクロは実行しない。読むのは文字の XML だけ）
+ */
+const OFFICE_FORMAT: Record<string, OfficeFormat> = {
+  docx: "docx",
+  docm: "docx",
+  xlsx: "xlsx",
+  xlsm: "xlsx",
+  pptx: "pptx",
+  pptm: "pptx",
 };
 
 /**
@@ -24,7 +40,7 @@ const WANTED_ENTRIES: Record<string, RegExp> = {
 export type Kind = "office" | "pdf" | "image" | "text" | "other";
 
 const TEXT_EXT = new Set(["txt", "csv", "tsv", "md", "log", "json", "xml", "html", "htm"]);
-const OFFICE_EXT = new Set(["docx", "xlsx", "pptx"]);
+const OFFICE_EXT = new Set(Object.keys(OFFICE_FORMAT));
 const IMAGE_EXT = new Set(["jpg", "jpeg", "png", "webp", "bmp", "gif"]);
 
 export function kindOf(ext: string): Kind {
@@ -39,6 +55,18 @@ export interface Extracted {
   text: string;
   method: "text" | "office" | "pdf-text" | "ocr" | "none";
   note?: string;
+  /** 本文の区切り（Excel のシート）。どこまで検査したかを示すため、各区切りが本文の何文字目から始まるかを持つ */
+  sections?: TextSection[];
+}
+
+export interface TextSection {
+  label: string;
+  start: number;
+}
+
+/** 本文の offset 文字目までに、区切りのいくつ目まで（1 始まり）が入っているか */
+export function sectionsUpTo(sections: TextSection[], offset: number): number {
+  return sections.filter((s) => s.start < offset).length;
 }
 
 // ---------------------------------------------------------------- テキスト
@@ -96,10 +124,11 @@ function paragraphsText(xml: string, ns: "w" | "a"): string {
 const numberOf = (name: string) => Number(name.match(/(?<!\d)(\d+)\.xml$/)?.[1] ?? 0);
 const byNumber = (a: string, b: string) => numberOf(a) - numberOf(b);
 
-function extractOffice(buf: Buffer, ext: string): string {
+function extractOffice(buf: Buffer, ext: string): { text: string; sections?: TextSection[] } {
+  const format = OFFICE_FORMAT[ext];
   // ZIP 爆弾対策: 必要な XML だけを展開し、申告された展開後サイズの合計と件数に上限を設ける。
   // fflate は申告サイズ分しか出力しないので、申告値を偽られても展開量はこの上限を超えない。
-  const wanted = WANTED_ENTRIES[ext];
+  const wanted = WANTED_ENTRIES[format];
   let total = 0;
   let count = 0;
   const zip = unzipSync(new Uint8Array(buf), {
@@ -125,15 +154,15 @@ function extractOffice(buf: Buffer, ext: string): string {
   const read = (name: string) => (zip[name] ? strFromU8(zip[name]) : "");
   const names = Object.keys(zip);
 
-  if (ext === "docx") {
+  if (format === "docx") {
     const parts = ["word/document.xml", ...names.filter((n) => /^word\/(header|footer)\d*\.xml$/.test(n))];
-    return parts.map((n) => paragraphsText(read(n), "w")).join("\n");
+    return { text: parts.map((n) => paragraphsText(read(n), "w")).join("\n") };
   }
 
-  if (ext === "pptx") {
+  if (format === "pptx") {
     const slides = names.filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)).sort(byNumber);
     const notes = names.filter((n) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(n)).sort(byNumber);
-    return [...slides, ...notes].map((n) => paragraphsText(read(n), "a")).join("\n");
+    return { text: [...slides, ...notes].map((n) => paragraphsText(read(n), "a")).join("\n") };
   }
 
   // xlsx
@@ -143,10 +172,20 @@ function extractOffice(buf: Buffer, ext: string): string {
     const ts = [...si.matchAll(/<t(?:\s[^<>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1]));
     if (si.includes("<si")) shared.push(ts.join(""));
   }
-  const sheets = names.filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort(byNumber);
   const lines: string[] = [];
-  for (const s of sheets) {
-    for (const row of read(s).split("</row>")) {
+  const sections: TextSection[] = [];
+  let offset = 0;
+  const push = (line: string) => {
+    lines.push(line);
+    offset += line.length + 1;
+  };
+  for (const sheet of sheetOrder(read, names)) {
+    // シートの区切り。前のシートの表と続けて読まれないよう空行を挟み、シート名の行を入れる
+    // （シート名に「社員名簿」「社外秘」などが入っていることもあるので、検査の対象にもなる）
+    if (lines.length > 0) push("");
+    sections.push({ label: sheet.name, start: offset });
+    push(`【シート: ${sheet.name}】`);
+    for (const row of read(sheet.path).split("</row>")) {
       const cells: string[] = [];
       // セルの中身は、次のセル（<c …>）が始まる手前までに限る。閉じタグのないセルが続いても、
       // 開始位置ごとに行末まで読み直さない
@@ -166,10 +205,62 @@ function extractOffice(buf: Buffer, ext: string): string {
         if (col !== null && col > cells.length && col < MAX_COLUMNS) while (cells.length < col) cells.push("");
         cells.push(value);
       }
-      if (cells.some((x) => x.trim())) lines.push(cells.join("\t"));
+      if (cells.some((x) => x.trim())) push(cells.join("\t"));
     }
   }
-  return lines.join("\n");
+  const comments = cellComments(read, names);
+  if (comments.length > 0) {
+    push("");
+    sections.push({ label: "コメント", start: offset });
+    push("【コメント】");
+    for (const c of comments) push(c);
+  }
+  return { text: lines.join("\n"), sections };
+}
+
+/**
+ * シートを、Excel のタブの順に、名前つきで返す。workbook.xml の <sheet> の並びと、関連づけ（rels）から
+ * 本文のファイル（worksheets/sheetN.xml）を引く。読めなければ番号順にし、名前は「シート N」にする
+ */
+function sheetOrder(read: (name: string) => string, names: string[]): { name: string; path: string }[] {
+  const files = names.filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort(byNumber);
+  const targets = new Map<string, string>();
+  for (const m of read("xl/_rels/workbook.xml.rels").matchAll(/<Relationship\b([^<>]*)\/?>/g)) {
+    const id = m[1].match(/\bId="([^"]*)"/)?.[1];
+    const target = m[1].match(/\bTarget="([^"]*)"/)?.[1];
+    if (id && target) targets.set(id, target.startsWith("/") ? target.slice(1) : `xl/${target}`);
+  }
+  const ordered: { name: string; path: string }[] = [];
+  for (const m of read("xl/workbook.xml").matchAll(/<sheet\b([^<>]*)\/?>/g)) {
+    const name = decodeXml(m[1].match(/\bname="([^"]*)"/)?.[1] ?? "");
+    const rid = m[1].match(/\br:id="([^"]*)"/)?.[1];
+    const p = rid ? targets.get(rid) : undefined;
+    // グラフだけのシート（chartsheets）は本文がないので飛ばす
+    if (p && files.includes(p) && !ordered.some((o) => o.path === p)) ordered.push({ name: name || `シート ${ordered.length + 1}`, path: p });
+  }
+  // workbook.xml に載っていないシートも、読み落とさないよう最後に足す
+  for (const f of files) if (!ordered.some((o) => o.path === f)) ordered.push({ name: `シート ${ordered.length + 1}`, path: f });
+  return ordered;
+}
+
+/** セルのコメント（メモ）とスレッド形式のコメントを「B2: 本文」の形で返す */
+function cellComments(read: (name: string) => string, names: string[]): string[] {
+  const out: string[] = [];
+  for (const n of names.filter((x) => /^xl\/(comments\d+|comments\/comment\d+)\.xml$/.test(x)).sort(byNumber)) {
+    for (const part of read(n).split("</comment>")) {
+      const ref = part.match(/<comment\b[^<>]*\bref="([A-Z]+\d+)"/)?.[1];
+      const text = [...part.matchAll(/<t(?:\s[^<>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1])).join("");
+      if (ref && text.trim()) out.push(`${ref}: ${text.trim()}`);
+    }
+  }
+  for (const n of names.filter((x) => /^xl\/threadedComments\/threadedComment\d+\.xml$/.test(x)).sort(byNumber)) {
+    for (const part of read(n).split("</threadedComment>")) {
+      const ref = part.match(/<threadedComment\b[^<>]*\bref="([A-Z]+\d+)"/)?.[1];
+      const text = decodeXml(part.match(/<text>([^<]*)<\/text>/)?.[1] ?? "");
+      if (ref && text.trim()) out.push(`${ref}: ${text.trim()}`);
+    }
+  }
+  return out;
 }
 
 /** 列の記号（A, B, …, AA）を 0 始まりの番号にする */
@@ -332,7 +423,7 @@ async function extractInner(
       break;
     case "office":
       if (!OFFICE_EXT.has(ext)) return { text: "", method: "none", note: `旧形式 .${ext} は未対応（メタ情報のみ）` };
-      r = { text: extractOffice(buf, ext), method: "office" };
+      r = { ...extractOffice(buf, ext), method: "office" };
       break;
     case "pdf":
       r = await extractPdf(buf, signal, allowOcr, ctx);
@@ -344,9 +435,14 @@ async function extractInner(
     default:
       return { text: "", method: "none", note: "未対応の形式（メタ情報のみ）" };
   }
+  // シートが複数ある Excel は、いくつのシートを検査したかを示す（本文が上限を超えたら、どのシートまでかも）
+  const sheets = r.sections?.filter((x) => x.label !== "コメント") ?? [];
   if (r.text.length > config.maxTextChars) {
     r.text = r.text.slice(0, config.maxTextChars);
-    r.note = [r.note, `先頭 ${config.maxTextChars.toLocaleString()} 文字のみ検査`].filter(Boolean).join(" / ");
+    const covered = sheets.length > 0 ? `（全 ${sheets.length} シート中 ${sectionsUpTo(sheets, config.maxTextChars)} シート目まで）` : "";
+    r.note = [r.note, `先頭 ${config.maxTextChars.toLocaleString()} 文字のみ検査${covered}`].filter(Boolean).join(" / ");
+  } else if (sheets.length > 1) {
+    r.note = [r.note, `全 ${sheets.length} シートを検査`].filter(Boolean).join(" / ");
   }
   return r;
 }

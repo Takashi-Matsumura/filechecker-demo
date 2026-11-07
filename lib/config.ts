@@ -27,8 +27,13 @@ export const config = {
   maxFiles: Number(process.env.SCAN_MAX_FILES ?? 100_000),
   /** 内容を読む最大ファイルサイズ(byte)。超えるものはメタ情報だけ */
   maxReadBytes: Number(process.env.SCAN_MAX_READ_BYTES ?? 30 * 1024 * 1024),
-  /** 検出対象にするテキストの最大文字数 */
-  maxTextChars: 200_000,
+  /**
+   * ルールで検査するテキストの最大文字数。ルールの検出はどんな中身でも文字数に比例した時間で終わる
+   * （tests/regex-safety.test.ts で確かめている）ので大きめにし、シートの多い Excel も最後まで検査する
+   */
+  maxTextChars: 5_000_000,
+  /** プレビューで画面に送る最大文字数（巨大な本文でブラウザが重くならないように） */
+  maxPreviewChars: 300_000,
   /** 文字を読む PDF の最大ページ数（数万ページの PDF で長引かないように） */
   maxPdfTextPages: 500,
   /** PDF の文字を読む時間の上限(ms)。超えたら、そこまでに読んだページで検査する */

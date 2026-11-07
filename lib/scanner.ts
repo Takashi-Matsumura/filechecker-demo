@@ -20,7 +20,7 @@ import {
   type Level,
   type NameRange,
 } from "./detect";
-import { extract, kindOf } from "./extract";
+import { extract, kindOf, sectionsUpTo, type TextSection } from "./extract";
 import {
   collectMoreNames,
   JUDGE_TEXT_CHARS,
@@ -412,6 +412,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   setProgress(id, "read");
   let text = "";
   let method = "none";
+  let sections: TextSection[] | undefined;
   const notes: string[] = [];
   // パスは検証つきで開き、開いたファイルが範囲内の実体と同じであることを確かめてから読む
   const buf = row.size > config.maxReadBytes ? "too_large" : await readValidatedFile(root, row.rel_path);
@@ -421,6 +422,7 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
     const r = await extract(buf, ext, signal, { ctx });
     text = r.text;
     method = r.method;
+    sections = r.sections;
     if (r.note) notes.push(r.note);
   }
 
@@ -461,7 +463,13 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
         ctx,
         (step, total) => setProgress(id, "names", step, total),
       );
-      if (more.truncated) notes.push(`本文が長いため、氏名の確認は先頭 ${(JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS).toLocaleString()} 字まで`);
+      if (more.truncated) {
+        // Excel は、AI の氏名の確認がどのシートまで届いたかも示す（ルールの検出と、書式から拾う氏名は全シートが対象）
+        const limit = JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS;
+        const sheets = sections?.filter((x) => x.label !== "コメント") ?? [];
+        const upTo = sheets.length > 1 ? `（全 ${sheets.length} シート中 ${sectionsUpTo(sheets, limit)} シート目まで）` : "";
+        notes.push(`本文が長いため、AI による氏名の確認は先頭 ${limit.toLocaleString()} 字まで${upTo}`);
+      }
     } catch (e) {
       if (signal.aborted) throw e;
       notes.push(`氏名の補完に失敗: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
@@ -948,13 +956,17 @@ export async function buildPreview(scanId: number, fileId: number): Promise<Prev
     return { available: false, reason: "氏名の位置が本文と合わないため、保存済みの抜粋を表示しています" };
   }
   const allFindings: Finding[] = person ? [...findings, person] : findings;
-  const marks = buildMarks(red.placed, allFindings, nameRanges);
+  // 伏せたあとの本文から、先頭だけを画面に送る（検査は全文に対して済んでいる。巨大な本文でブラウザが重くならないように）
+  const masked = maskNameRanges(red.text, nameRanges);
+  const cut = masked.length > config.maxPreviewChars;
+  const marks = buildMarks(red.placed, allFindings, nameRanges).filter((m) => !cut || m.end <= config.maxPreviewChars);
+  const previewNote = cut ? `本文が長いため、先頭 ${config.maxPreviewChars.toLocaleString()} 字を表示しています` : null;
   return {
     available: true,
-    text: maskNameRanges(red.text, nameRanges),
+    text: cut ? masked.slice(0, config.maxPreviewChars) : masked,
     marks,
     changed,
-    note: r.note ?? null,
+    note: [r.note, previewNote].filter(Boolean).join(" / ") || null,
     source: "live",
   };
 }

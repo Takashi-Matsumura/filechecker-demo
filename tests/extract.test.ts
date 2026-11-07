@@ -12,6 +12,7 @@ import { createJiti } from "jiti";
 const root = path.resolve(import.meta.dirname, "..");
 const jiti = createJiti(import.meta.url, { alias: { "@/": `${root}/` } });
 const { extract } = await jiti.import<typeof import("../lib/extract.ts")>(path.join(root, "lib/extract.ts"));
+const { config } = await jiti.import<typeof import("../lib/config.ts")>(path.join(root, "lib/config.ts"));
 
 function office(files: Record<string, string>): Buffer {
   const entries = Object.fromEntries(Object.entries(files).map(([k, v]) => [k, strToU8(v)]));
@@ -70,7 +71,58 @@ describe("Office の文字抽出", () => {
         `<row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"/><c r="C2"><v>123</v></c></row></sheetData></worksheet>`,
     });
     const r = await extract(buf, "xlsx");
-    assert.equal(r.text, "氏名\t\t電話\n山田 太郎\t\t123");
+    // workbook.xml がなければ、シートは番号順・名前は「シート N」
+    assert.equal(r.text, "【シート: シート 1】\n氏名\t\t電話\n山田 太郎\t\t123");
+  });
+  it("すべてのシートを Excel のタブの順に、シート名つきで読み、セルのコメントも読む（.xlsm も同じ）", async () => {
+    const sheet = (v: string) => `<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>${v}</t></is></c></row></sheetData></worksheet>`;
+    const files = {
+      // タブの順は「社員名簿 → 集計 → 予算」。ファイルの番号順（sheet1, 2, 3）とは違う
+      "xl/workbook.xml":
+        `<workbook><sheets><sheet name="社員名簿" sheetId="3" r:id="rId3"/><sheet name="集計" sheetId="1" r:id="rId1"/>` +
+        `<sheet name="予算&amp;実績" sheetId="2" r:id="rId2"/><sheet name="グラフ" sheetId="4" r:id="rId4"/></sheets></workbook>`,
+      "xl/_rels/workbook.xml.rels":
+        `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="/xl/worksheets/sheet2.xml"/>` +
+        `<Relationship Id="rId3" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Target="chartsheets/sheet1.xml"/></Relationships>`,
+      "xl/worksheets/sheet1.xml": sheet("集計の中身"),
+      "xl/worksheets/sheet2.xml": sheet("予算の中身"),
+      "xl/worksheets/sheet3.xml": sheet("名簿の中身"),
+      "xl/worksheets/sheet4.xml": sheet("workbook に載っていないシート"),
+      "xl/comments1.xml": `<comments><commentList><comment ref="B2" authorId="0"><text><r><t>電話 03-1234-5678</t></r></text></comment></commentList></comments>`,
+      // Excel 以外のソフトが書くコメントの置き場所
+      "xl/comments/comment2.xml": `<comments><commentList><comment ref="D4" authorId="0"><text><t>前年比 3% 増</t></text></comment></commentList></comments>`,
+      "xl/threadedComments/threadedComment1.xml": `<ThreadedComments><threadedComment ref="C3" id="{x}"><text>要確認</text></threadedComment></ThreadedComments>`,
+    };
+    for (const ext of ["xlsx", "xlsm"]) {
+      const r = await extract(office(files), ext);
+      assert.equal(r.method, "office", ext);
+      assert.equal(
+        r.text,
+        [
+          "【シート: 社員名簿】", "名簿の中身", "",
+          "【シート: 集計】", "集計の中身", "",
+          "【シート: 予算&実績】", "予算の中身", "",
+          "【シート: シート 4】", "workbook に載っていないシート", "",
+          "【コメント】", "B2: 電話 03-1234-5678", "D4: 前年比 3% 増", "C3: 要確認",
+        ].join("\n"),
+        ext,
+      );
+      assert.deepEqual(r.sections?.map((x) => x.label), ["社員名簿", "集計", "予算&実績", "シート 4", "コメント"]);
+      assert.equal(r.note, "全 4 シートを検査");
+      // 区切りの開始位置は、本文の中のシート名の行を指す
+      for (const sec of r.sections ?? []) assert.ok(r.text.startsWith("【", sec.start), sec.label);
+    }
+  });
+  it("文字数の上限を超えたら、どのシートまで検査したかを示す", async () => {
+    const saved = config.maxTextChars;
+    (config as { maxTextChars: number }).maxTextChars = 60;
+    try {
+      const sheet = (v: string) => `<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>${v}</t></is></c></row></sheetData></worksheet>`;
+      const r = await extract(office({ "xl/worksheets/sheet1.xml": sheet("あ".repeat(30)), "xl/worksheets/sheet2.xml": sheet("い".repeat(30)), "xl/worksheets/sheet3.xml": sheet("う") }), "xlsx");
+      assert.equal(r.note, "先頭 60 文字のみ検査（全 3 シート中 2 シート目まで）");
+    } finally {
+      (config as { maxTextChars: number }).maxTextChars = saved;
+    }
   });
 
   // 以前の正規表現では、ここで数十秒〜それ以上かかっていた（長さの二乗で増える）
@@ -108,7 +160,14 @@ describe("PDF の文字抽出", () => {
   });
   it("文字数が上限を超えたら、それ以上のページは読まない", async () => {
     const long = (i: number) => [`Page ${i}`, ...Array.from({ length: 20 }, () => "y".repeat(80))].join("\n");
-    const r = await extract(pdf(Array.from({ length: 300 }, (_, i) => long(i + 1))), "pdf", undefined, { allowOcr: false });
+    const saved = config.maxTextChars;
+    (config as { maxTextChars: number }).maxTextChars = 200_000;
+    let r;
+    try {
+      r = await extract(pdf(Array.from({ length: 300 }, (_, i) => long(i + 1))), "pdf", undefined, { allowOcr: false });
+    } finally {
+      (config as { maxTextChars: number }).maxTextChars = saved;
+    }
     assert.match(r.note ?? "", /文字数が多いため、全300ページ中、先頭\d+ページまで読み取り/);
     assert.doesNotMatch(r.text, /Page 300 /);
   });
