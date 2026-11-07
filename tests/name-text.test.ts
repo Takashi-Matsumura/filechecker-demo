@@ -58,6 +58,12 @@ describe("condenseForNames", () => {
     assert.equal(c.text, "田中 一郎\n山田 太郎\n田中 太郎");
   });
 
+  it("1文字ずつの氏名（林 学）も新しい語として数え、縮めるときにも消さない", () => {
+    const c = nt.condenseForNames(`林 一郎\n山田 学\n1,2,3\n林 学\n${"9".repeat(40)} 李 ${"9".repeat(40)}`);
+    assert.ok(c.text.includes("林 学"), c.text);
+    assert.ok(c.text.includes("李"), c.text);
+  });
+
   it("半角カナ・ローマ字の氏名も新しい語として数える", () => {
     const c = nt.condenseForNames("1,2,3\nﾔﾏﾀﾞ ﾀﾛｳ\n4,5,6\nDaisuke Matsumoto\n7,8,9");
     assert.equal(c.text, "ﾔﾏﾀﾞ ﾀﾛｳ\nDaisuke Matsumoto");
