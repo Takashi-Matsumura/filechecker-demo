@@ -45,3 +45,6 @@ next-env.d.ts
 /testdata/sample-files/
 /testdata/hard-files/
 /data/
+
+# 紹介動画の出力（docs/video/build.mjs で作り直せる）
+/docs/video/out/
