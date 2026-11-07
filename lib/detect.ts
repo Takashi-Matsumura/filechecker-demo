@@ -251,15 +251,43 @@ export interface DetectResult {
   spans: Span[];
 }
 
+/** 開始位置の順に並んだ2つの一覧を、開始位置の順に1つにまとめる（件数に比例した時間で終わる） */
+function mergeByStart(a: Span[], b: Span[]): Span[] {
+  if (b.length === 0) return a;
+  const out: Span[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (j >= b.length || (i < a.length && a[i].start <= b[j].start)) out.push(a[i++]);
+    else out.push(b[j++]);
+  }
+  return out;
+}
+
 export function detect(text: string): DetectResult {
   const findings: Finding[] = [];
   const spans: Span[] = [];
-  const overlaps = (s: number, e: number) => spans.some((x) => s < x.end && e > x.start);
+  // 先に採用した上位ルールの一致（開始位置の順・互いに重ならない）。重なりは二分探索で調べる。
+  // 一致ごとに全件と比べると、一致が多い本文（大きな名簿など）で時間が件数の二乗で増えるため
+  let occupied: Span[] = [];
+  const overlaps = (s: number, e: number) => {
+    // 終わりが s より後ろにある最初の一致を探し、それが e より前で始まっていれば重なっている
+    let lo = 0;
+    let hi = occupied.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (occupied[mid].end <= s) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < occupied.length && occupied[lo].start < e;
+  };
 
   for (const rule of RULES) {
     rule.re.lastIndex = 0;
     let count = 0;
     const matched: string[] = [];
+    // このルールの一致（正規表現は前から順に、重ならずに一致を返すので、開始位置の順に並ぶ）
+    const added: Span[] = [];
     let m: RegExpExecArray | null;
     while ((m = rule.re.exec(text))) {
       const start = m.index;
@@ -269,8 +297,11 @@ export function detect(text: string): DetectResult {
       if (rule.accept && !rule.accept(m, text)) continue;
       count++;
       matched.push(m[0]);
-      spans.push({ type: rule.type, start, end, masked: rule.mask(m[0]) });
+      const span = { type: rule.type, start, end, masked: rule.mask(m[0]) };
+      spans.push(span);
+      added.push(span);
     }
+    occupied = mergeByStart(occupied, added);
     if (count > 0) {
       const level = rule.levelOf ? rule.levelOf(matched) : rule.level;
       findings.push({ type: rule.type, label: FINDING_LABELS[rule.type], level, count, samples: [] });

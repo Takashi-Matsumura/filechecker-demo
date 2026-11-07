@@ -149,6 +149,9 @@ describe("処理時間（どんな中身でも線形時間で終わる）", () =
     // 以前の生年月日のルール（\s*日?\s*）では、ここで約24秒かかっていた
     "年月日の後の長い空白（生が続かない）": "1年1月1" + " ".repeat(N) + "x",
     "日付の後の長い空白": "1/1/1" + " ".repeat(N),
+    // 一致がとても多い本文（以前は、一致ごとにそれまでの全件と重なりを比べていて、件数の二乗の時間がかかった）
+    "メールアドレスの大量の一致": "a@b.jp ".repeat(N / 7),
+    "電話番号の大量の一致": "03-1234-5678\n".repeat(N / 13),
   };
   for (const [name, text] of Object.entries(cases)) {
     it(name, () => {
@@ -160,6 +163,19 @@ describe("処理時間（どんな中身でも線形時間で終わる）", () =
       assert.ok(ms < 1000, `${Math.round(ms)}ms`);
     });
   }
+  it("一致が 30 万件あっても、1 秒以内に終わる（重なりの判定が件数に比例する時間で終わること）", () => {
+    const text = "a@b.jp ".repeat(300_000);
+    const t = performance.now();
+    const r = detect(text);
+    const ms = performance.now() - t;
+    assert.equal(r.spans.length, 300_000);
+    assert.ok(ms < 1500, `${Math.round(ms)}ms`);
+  });
+  it("上位のルールと重なる一致は、これまでどおり数えない（重なりの判定を速くしても結果は同じ）", () => {
+    // カード番号（上位）と、その一部に見える電話番号の形・マイナンバーの形が重なる
+    const text = `カード ${CARD} / TEL 03-1234-5678 / 番号 ${MYNUMBER}`;
+    assert.deepEqual(typesOf(text), ["mynumber", "credit_card", "phone"]);
+  });
   it("メールアドレスは引き続き検出する（ローカル部は64文字まで）", () => {
     assert.deepEqual(found("連絡先：taro.yamada+tag@mail.example.co.jp。").map((x) => x.text), ["taro.yamada+tag@mail.example.co.jp"]);
     assert.deepEqual(typesOf(`${"x".repeat(65)}@example.com`), []);
