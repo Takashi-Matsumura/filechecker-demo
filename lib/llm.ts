@@ -237,6 +237,8 @@ export interface JudgeInput {
   extractMethod: string;
   ruleSummary: string;
   text: string;
+  /** 本文を縮めて渡すときの、元の本文の字数（judgeTextOf）。そのまま渡すときは null */
+  condensedFrom?: number | null;
 }
 
 const JUDGE_SYSTEM = `あなたは社内ファイルの棚卸しを手伝うアシスタントです。
@@ -264,7 +266,11 @@ export async function judgeFile(input: JudgeInput, signal?: AbortSignal, ctx?: C
   const user = `パス: ${input.relPath}
 サイズ: ${input.sizeKb} KB / 更新日: ${input.mtime}${input.isStale ? "（長期間更新なし）" : ""}${input.isDuplicate ? " / 同一内容のファイルが他にもある" : ""}
 抽出方法: ${input.extractMethod}
-ルール検出: ${input.ruleSummary || "なし"}
+ルール検出: ${input.ruleSummary || "なし"}${
+    input.condensedFrom
+      ? `\n本文の扱い: 元の本文は ${input.condensedFrom.toLocaleString()} 字。長いため、数字だけの並びと既に出た語だけの行を省き、語のあいだの長い数字・数式を「…」に縮めて、文書全体から切り出した（省いた部分も含めた文書全体として判断する）`
+      : ""
+  }
 
 本文:
 """
@@ -384,6 +390,24 @@ ${text}
   }
 }
 
+/**
+ * 判定に渡す本文（JUDGE_TEXT_CHARS 字まで）。短ければそのまま。長ければ、氏名の確認と同じく縮め（condenseForNames）、
+ * 縮めても長くシートが複数あれば各シートの頭から切り出す。先頭だけを見ると、30 シート目の名簿や、
+ * 予算表の後ろに付いた連絡先の一覧を見落とすため。sections の位置は masked 上のもの
+ */
+export function judgeTextOf(masked: string, sections?: TextSection[]): { text: string; condensedFrom: number | null } {
+  if (masked.length <= JUDGE_TEXT_CHARS) return { text: masked, condensedFrom: null };
+  const c = condenseForNames(masked);
+  let text = c.text;
+  const sheets = sections?.filter((x) => x.label !== "コメント") ?? [];
+  if (text.length > JUDGE_TEXT_CHARS && sections && sheets.length > 1) {
+    const mapped = sections.map((x) => ({ label: x.label, start: toCondensedOffset(c, x.start) }));
+    // 判定は文書の種類と中身の見当がつけばよいので、1 シートあたりの下限を短くして、多くのシートを見せる
+    text = sampleSections(text, mapped, 0, JUDGE_TEXT_CHARS, 150).text.replace(/^\n/, "");
+  }
+  return { text: text.slice(0, JUDGE_TEXT_CHARS), condensedFrom: masked.length };
+}
+
 /** 氏名の補完で、本文のどこまでを AI が確認したか */
 export type NamesCoverage =
   /** 最後まで確認した（新しい語の無い行は省いた） */
@@ -395,7 +419,7 @@ export type NamesCoverage =
 
 /**
  * 判定（judgeFile）で拾いきれない氏名・読み仮名を補う。
- * 判定は本文の先頭 JUDGE_TEXT_CHARS 字しか見ず、氏名も JUDGE_NAME_CAP 件までしか返さないため、
+ * 判定は JUDGE_TEXT_CHARS 字までの本文しか見ず、氏名も JUDGE_NAME_CAP 件までしか返さないため、
  * 判定が上限に達したとき・本文がそれより長いとき・判定に失敗したときに、本文を区切って氏名だけを聞き直す。
  * 聞き直す本文は、それまでに見せていない語を含む行だけに絞る（condenseForNames）。数字やくり返しの多い表は大きく縮み、
  * 同じ回数の呼び出し（最大 MAX_NAME_CHUNKS 区切り）で最後まで確認できる。それでも長い本文で、区切り（Excel のシート）が
@@ -404,7 +428,8 @@ export type NamesCoverage =
  */
 export async function collectMoreNames(
   maskedText: string,
-  judged: { names: string[]; readings: string[] } | null,
+  /** 判定の結果と、判定に渡した本文（judgeTextOf）。判定に失敗したときは null */
+  judged: { names: string[]; readings: string[]; text: string } | null,
   signal?: AbortSignal,
   ctx?: CallContext,
   /** 区切りを1つ聞き始めるたびに呼ぶ（棚卸しの画面に「氏名の確認 3 / 10」と出すため） */
@@ -429,10 +454,9 @@ export async function collectMoreNames(
     return added;
   };
 
-  // 判定が上限に達していなければ、判定が見た先頭は聞き直さない（境目の行は、判定が途中までしか見ていないので聞き直す）
-  if (!capped && maskedText.length <= JUDGE_TEXT_CHARS) return { names, readings, coverage: { kind: "full" } };
-  const headEnd = capped ? 0 : maskedText.lastIndexOf("\n", JUDGE_TEXT_CHARS) + 1;
-  const condensed = condenseForNames(maskedText.slice(headEnd), wordsOf(maskedText.slice(0, headEnd)), headEnd);
+  // 判定が上限に達していなければ、判定が見た語だけの行は聞き直さない（判定が途中までしか見ていない行は、残りの語が新しいので聞き直す）
+  const condensed = condenseForNames(maskedText, capped || !judged ? new Set() : wordsOf(judged.text));
+  if (!condensed.text.trim()) return { names, readings, coverage: { kind: "full" } };
   const maxChunks = MAX_NAME_CHUNKS - (capped ? 0 : 1);
   const budget = JUDGE_TEXT_CHARS * maxChunks;
 

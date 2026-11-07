@@ -31,7 +31,7 @@ process.env.DB_PATH = path.join(await import("node:fs/promises").then((f) => f.m
 const root = path.resolve(import.meta.dirname, "..");
 const jiti = createJiti(import.meta.url, { alias: { "@/": `${root}/` } });
 const nt = await jiti.import<typeof import("../lib/name-text.ts")>(path.join(root, "lib/name-text.ts"));
-const { collectMoreNames, JUDGE_TEXT_CHARS, MAX_NAME_CHUNKS } = await jiti.import<typeof import("../lib/llm.ts")>(path.join(root, "lib/llm.ts"));
+const { collectMoreNames, judgeTextOf, JUDGE_TEXT_CHARS, MAX_NAME_CHUNKS } = await jiti.import<typeof import("../lib/llm.ts")>(path.join(root, "lib/llm.ts"));
 
 after(() => server.close());
 
@@ -99,17 +99,18 @@ describe("collectMoreNames", () => {
     received.length = 0;
     const text = [budget(3000), "承認 ★佐藤 花子", budget(3000)].join("\n");
     assert.ok(text.length > JUDGE_TEXT_CHARS * MAX_NAME_CHUNKS * 3);
-    const r = await collectMoreNames(text, { names: [], readings: [] });
+    const r = await collectMoreNames(text, { names: [], readings: [], text: text.slice(0, JUDGE_TEXT_CHARS) });
     assert.deepEqual(r.names, ["★佐藤"]);
     assert.deepEqual(r.coverage, { kind: "full" });
     assert.equal(received.length, 1, `呼び出しが多い: ${received.length}`);
   });
 
-  it("判定が見た先頭の行は聞き直さない", async () => {
+  it("判定が見た行は聞き直さず、判定が見ていない行は聞く", async () => {
     received.length = 0;
     const head = Array.from({ length: 1000 }, (_, i) => `議題 担当 ★${kanji(i)}`).join("\n");
-    const r = await collectMoreNames(head + "\n" + budget(100), { names: [], readings: [] });
-    assert.ok(!received.some((t) => t.includes(`★${kanji(0)}\n`)), "先頭の行を聞き直している");
+    const text = head + "\n" + budget(100);
+    const r = await collectMoreNames(text, { names: [], readings: [], text: judgeTextOf(text).text });
+    assert.ok(!received.some((t) => t.includes(`★${kanji(0)}\n`)), "判定が見た行を聞き直している");
     assert.ok(r.names.length > 0, "境目より後の氏名を聞いていない");
   });
 
@@ -134,5 +135,31 @@ describe("collectMoreNames", () => {
     const r = await collectMoreNames(text, null, undefined, undefined, undefined, sections);
     assert.equal(r.coverage.kind, "sampled");
     for (let s = 0; s < 30; s++) assert.ok(r.names.includes(`★${kanji(500000 + s)}`), `S${s} の氏名を確認していない`);
+  });
+});
+
+describe("judgeTextOf", () => {
+  it("短い本文はそのまま渡す", () => {
+    assert.deepEqual(judgeTextOf("会議メモ\n山田"), { text: "会議メモ\n山田", condensedFrom: null });
+  });
+
+  it("長い表は縮めて、後ろのほうにある名簿も判定に見せる", () => {
+    const text = [budget(3000), "連絡先一覧", "山田 太郎,03-1234-5678", "佐藤 花子,03-2345-6789"].join("\n");
+    const j = judgeTextOf(text);
+    assert.equal(j.condensedFrom, text.length);
+    assert.ok(j.text.length <= JUDGE_TEXT_CHARS);
+    assert.ok(j.text.includes("連絡先一覧") && j.text.includes("佐藤 花子,03-2345-6789"), j.text);
+  });
+
+  it("縮めても長い Excel は、後ろのシートの頭も判定に見せる", () => {
+    let text = "";
+    const sections: { label: string; start: number }[] = [];
+    for (let s = 0; s < 20; s++) {
+      sections.push({ label: `S${s}`, start: text.length });
+      text += `【シート: S${s}】\n` + Array.from({ length: 200 }, (_, i) => `記録 ${kanji(s * 1000 + i)}`).join("\n") + "\n";
+    }
+    const j = judgeTextOf(text, sections);
+    assert.ok(j.text.length <= JUDGE_TEXT_CHARS);
+    assert.ok(j.text.includes("【シート: S19】"), "最後のシートが入っていない");
   });
 });

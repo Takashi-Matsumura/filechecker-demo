@@ -26,9 +26,9 @@ import { keepAwake } from "./keep-awake";
 import { extract, kindOf, sectionsUpTo, type TextSection } from "./extract";
 import {
   collectMoreNames,
-  JUDGE_TEXT_CHARS,
   JUDGE_VERSION,
   judgeFile,
+  judgeTextOf,
   resolveConcurrency,
   type AiJudgement,
   type NamesCoverage,
@@ -461,7 +461,12 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   const ruleSummary = findings.map((f) => `${f.label}×${f.count}`).join("、");
   const masked = redact(text, spans).text;
 
-  // AI 判定。本文はルールでマスクした版を渡す（ローカル LLM だが、出力側に生の番号を残さないため）
+  // シートの位置は、番号を伏せた本文の位置に直して使う（伏せ字で長さが変わるため）
+  const starts = sections ? toRedactedOffsets(spans, sections.map((x) => x.start)) : [];
+  const maskedSections = sections?.map((x, i) => ({ label: x.label, start: starts[i] }));
+  // AI 判定。本文はルールでマスクした版を渡す（ローカル LLM だが、出力側に生の番号を残さないため）。
+  // 長い本文は縮めて、文書全体から切り出す
+  const judgeText = judgeTextOf(masked, maskedSections);
   let ai: AiJudgement | null = null;
   setProgress(id, "judge");
   try {
@@ -473,7 +478,8 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
       isDuplicate: row.dup_of !== null,
       extractMethod: method,
       ruleSummary,
-      text: masked.slice(0, JUDGE_TEXT_CHARS),
+      text: judgeText.text,
+      condensedFrom: judgeText.condensedFrom,
     }, signal, ctx);
   } catch (e) {
     // 中断による打ち切りは失敗扱いにせず、呼び出し元で「未処理」に戻す
@@ -486,15 +492,13 @@ async function processFile(id: number, root: string, ext: string, signal: AbortS
   let more = { names: [] as string[], readings: [] as string[] };
   if (text.trim()) {
     try {
-      // シートの位置は、番号を伏せた本文の位置に直して渡す（伏せ字で長さが変わるため）
-      const starts = sections ? toRedactedOffsets(spans, sections.map((x) => x.start)) : [];
       const r = await collectMoreNames(
         masked,
-        ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [] } : null,
+        ai ? { names: ai.person_names ?? [], readings: ai.name_readings ?? [], text: judgeText.text } : null,
         signal,
         ctx,
         (step, total) => setProgress(id, "names", step, total),
-        sections?.map((x, i) => ({ label: x.label, start: starts[i] })),
+        maskedSections,
       );
       more = r;
       const note = namesCoverageNote(r.coverage, sections, masked, spans);
